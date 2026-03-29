@@ -1,0 +1,37 @@
+# EditorConfig helps maintain consistent coding styles
+# https://editorconfig.org
+
+root = true
+
+# Default settings
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Python
+[*.py]
+indent_size = 4
+
+[*.pyi]
+indent_size = 4
+
+# Markdown (trailing spaces can matter)
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefiles require tabs
+[Makefile]
+indent_style = tab
+
+# Windows scripts
+[*.{bat,cmd}]
+end_of_line = crlf
+
+# PowerShell
+[*.{ps1,psm1,psd1}]
+end_of_line = crlf
+indent_size = 4

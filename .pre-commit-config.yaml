@@ -1,0 +1,183 @@
+# Pre-commit hooks configuration
+# See https://pre-commit.com for more information
+# Install: `pip install pre-commit` or `uv tool install pre-commit`
+# Setup: `pre-commit install`
+# Run manually: `pre-commit run --all-files`
+
+default_language_version:
+  python: python3.13
+
+# Only run on changed files by default, but can be overridden with --all-files
+default_stages: [pre-commit]
+
+repos:
+  # ==========================================================================
+  # General checks
+  # ==========================================================================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # File hygiene
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+        exclude: ^(frontend/pnpm-lock\.yaml|backend/uv\.lock)$
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: (?i)\.(bat|cmd|ps1|psm1|psd1)$
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+
+      # Git checks
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      # TODO: After bootstrap, protect `main` instead of `dev`
+      - id: no-commit-to-branch
+        args: [--branch, dev]
+
+      # Data files
+      - id: check-json
+      - id: check-yaml
+        args: [--unsafe]  # Allow custom YAML tags
+      - id: check-toml
+
+      # Python checks (fast)
+      - id: check-ast
+      - id: debug-statements
+      - id: check-docstring-first
+
+      # Security
+      - id: detect-private-key
+
+  # ==========================================================================
+  # Python - Ruff (linting and formatting)
+  # ==========================================================================
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.3
+    hooks:
+      # Run the linter (with autofix)
+      # - id: ruff
+      #   args: [--fix, --exit-non-zero-on-fix]
+      #   types_or: [python, pyi]
+
+      # Run the formatter
+      - id: ruff-format
+        types_or: [python, pyi]
+
+  # ==========================================================================
+  # Python - Type checking with mypy
+  # ==========================================================================
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.13.0
+  #   hooks:
+  #     - id: mypy
+  #       args: [--config-file=pyproject.toml]
+  #       pass_filenames: false
+  #       # Only run when Python files change
+  #       types: [python]
+  #       # mypy needs to check the whole project for proper type resolution
+  #       always_run: false
+  #       additional_dependencies:
+  #         - types-pyyaml
+  #         - types-pillow
+  #         - pydantic>=2.0
+  #         - sqlalchemy>=2.0
+  #         - fastapi>=0.100
+
+  # ==========================================================================
+  # Frontend - Prettier (formatting)
+  # ==========================================================================
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier (frontend)
+        entry: python scripts/precommit_frontend.py prettier
+        language: python
+        files: ^frontend/.*\.(js|jsx|ts|tsx|vue|mjs|cjs|css|scss|json|md|yaml|yml|html)$
+        exclude: ^frontend/(node_modules|\.nuxt|\.output|dist)/|^frontend/pnpm-lock\.yaml$
+
+  # ==========================================================================
+  # Frontend - ESLint (linting)
+  # ==========================================================================
+  # - repo: local
+  #   hooks:
+  #     - id: eslint
+  #       name: eslint (frontend)
+  #       entry: python scripts/precommit_frontend.py eslint
+  #       language: python
+  #       files: ^frontend/.*\.(js|jsx|ts|tsx|vue)$
+  #       exclude: ^frontend/(node_modules|\.nuxt|\.output|dist)/
+
+  # ==========================================================================
+  # Frontend - TypeScript type checking
+  # ==========================================================================
+  # - repo: local
+  #   hooks:
+  #     - id: vue-tsc
+  #       name: vue-tsc
+  #       entry: pnpm -C frontend exec vue-tsc --noEmit
+  #       language: system
+  #       files: ^frontend/.*\.(ts|tsx|vue)$
+  #       exclude: ^frontend/(node_modules|\.nuxt|\.output|dist)/
+  #       pass_filenames: false
+
+  # ==========================================================================
+  # Spell checking (optional but recommended)
+  # ==========================================================================
+  # - repo: https://github.com/crate-ci/typos
+  #   rev: v1.29.4
+  #   hooks:
+  #     - id: typos
+  #       args: [--config, .typos.toml]
+  #       exclude: |
+  #         (?x)^(
+  #           .*lock\.yaml|
+  #           .*lock\.json|
+  #           \.gitignore|
+  #           frontend/i18n/.*
+  #         )$
+
+  # ==========================================================================
+  # Commit message linting (conventional commits)
+  # ==========================================================================
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.0.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert]
+
+  # ==========================================================================
+  # Security scanning
+  # ==========================================================================
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
+        name: gitleaks
+        description: Detect hardcoded secrets
+        language_version: 1.23.6
+
+  # ==========================================================================
+  # Additional useful hooks
+  # ==========================================================================
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.31.0
+    hooks:
+      - id: check-github-workflows
+        files: ^\.github/workflows/.*\.(yml|yaml)$
+      - id: check-dependabot
+        files: ^\.github/dependabot\.yml$
+
+# CI configuration - run more comprehensive checks
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ""
+  autoupdate_commit_msg: "[pre-commit.ci] pre-commit autoupdate"
+  autoupdate_schedule: weekly
+  skip: [vue-tsc]  # Skip in CI as it requires full node_modules
+  submodules: false

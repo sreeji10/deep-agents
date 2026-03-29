@@ -1,0 +1,61 @@
+# Typos (spell checker) configuration
+# https://github.com/crate-ci/typos
+
+[files]
+extend-exclude = [
+    # Lock files
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "uv.lock",
+
+    # Build artifacts
+    "dist/",
+    ".nuxt/",
+    ".output/",
+    "node_modules/",
+    "__pycache__/",
+
+    # Data files
+    "*.db",
+    "*.sqlite",
+    "*.whl",
+    "*.tar.gz",
+
+    # i18n files (may have intentional misspellings in other languages)
+    "frontend/i18n/",
+
+    # Generated migration files
+    "backend/airbeeps/alembic/versions/",
+]
+
+[type.vue]
+# Define .vue as a valid file type for typos
+extend-glob = ["*.vue"]
+
+[default]
+extend-ignore-identifiers-re = [
+    # Common abbreviations and technical terms
+    "ASYNCIO",
+    "ERRORED",
+    "SIGNIN",
+    "SIGNOUT",
+    "SIGNUP",
+    "SISO",
+    "MISO",
+]
+
+[default.extend-words]
+# Technical terms that look like typos
+ue = "ue"  # Common in database column names
+te = "te"  # Common in Vue templates
+nd = "nd"  # Second, third, etc.
+ba = "ba"  # Abbreviation
+
+[type.py]
+extend-ignore-identifiers-re = [
+    # Python-specific patterns
+    "cls",
+    "kwargs",
+    "args",
+]
