@@ -95,8 +95,7 @@ async def stream_run(run_id: str) -> StreamingResponse:
         raise HTTPException(status_code=404, detail="Run not found")
 
     async def event_generator() -> AsyncIterator[str]:
-        with record.mutex:
-            historical_events = list(record.events)
+        historical_events = await manager.get_events(run_id)
         for event in historical_events:
             yield sse_pack(event)
 
@@ -105,7 +104,7 @@ async def stream_run(run_id: str) -> StreamingResponse:
             return
         try:
             while True:
-                if record.done_event.is_set() and queue.empty():
+                if await manager.is_done(run_id) and queue.empty():
                     break
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -44,7 +45,9 @@ def _patch_runtime_defaults(monkeypatch) -> None:  # type: ignore[no-untyped-def
     )
 
 
-def test_runs_api_and_sse_event_contract(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_runs_api_and_sse_event_contract(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
     _patch_runtime_defaults(monkeypatch)
     fake_agent = FakeAgent(
         snapshots=[
@@ -70,7 +73,9 @@ def test_runs_api_and_sse_event_contract(monkeypatch) -> None:  # type: ignore[n
         ]
     )
     monkeypatch.setattr(run_manager, "get_agent", lambda: fake_agent)
-    monkeypatch.setattr(server, "manager", run_manager.RunManager())
+    monkeypatch.setattr(
+        server, "manager", run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    )
 
     client = TestClient(server.app)
     create_response = client.post(

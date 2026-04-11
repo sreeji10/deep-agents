@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any
 
 from backend import run_manager
@@ -29,15 +30,18 @@ class FakeAgent:
             yield snapshot
 
 
-def wait_for_terminal_state(record: Any, timeout_seconds: float = 3.0) -> None:
+def wait_for_terminal_state(
+    manager: run_manager.RunManager, run_id: str, timeout_seconds: float = 3.0
+) -> run_manager.RunRecord:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
+        record = asyncio.run(manager.get_run(run_id))
+        if record is None:
+            break
         if record.status in {"completed", "failed"}:
-            return
+            return record
         time.sleep(0.01)
-    raise AssertionError(
-        f"Run did not reach terminal state before timeout. status={record.status}"
-    )
+    raise AssertionError(f"Run did not reach terminal state before timeout. run_id={run_id}")
 
 
 def _patch_runtime_defaults(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -54,7 +58,9 @@ def _patch_runtime_defaults(monkeypatch) -> None:  # type: ignore[no-untyped-def
     )
 
 
-def test_run_manager_completes_and_emits_expected_events(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_run_manager_completes_and_emits_expected_events(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
     _patch_runtime_defaults(monkeypatch)
     fake_agent = FakeAgent(
         snapshots=[
@@ -84,14 +90,14 @@ def test_run_manager_completes_and_emits_expected_events(monkeypatch) -> None:  
     )
     monkeypatch.setattr(run_manager, "get_agent", lambda: fake_agent)
 
-    manager = run_manager.RunManager()
-    record = asyncio.run(
+    manager = run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    started_record = asyncio.run(
         manager.start_run(
             prompt="Find Kerala timeline with sources",
             thread_id="test-thread",
         )
     )
-    wait_for_terminal_state(record)
+    record = wait_for_terminal_state(manager, started_record.run_id)
 
     assert record.status == "completed"
     assert record.final_answer is not None
@@ -107,7 +113,9 @@ def test_run_manager_completes_and_emits_expected_events(monkeypatch) -> None:  
     assert "run_completed" in event_types
 
 
-def test_run_manager_recovers_placeholder_final_answer(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_run_manager_recovers_placeholder_final_answer(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
     _patch_runtime_defaults(monkeypatch)
     fake_agent = FakeAgent(
         snapshots=[
@@ -126,11 +134,11 @@ def test_run_manager_recovers_placeholder_final_answer(monkeypatch) -> None:  # 
         lambda _thread_id: "Recovered answer with source https://example.com/recovered",
     )
 
-    manager = run_manager.RunManager()
-    record = asyncio.run(
+    manager = run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    started_record = asyncio.run(
         manager.start_run(prompt="Any prompt", thread_id="test-thread-recovery")
     )
-    wait_for_terminal_state(record)
+    record = wait_for_terminal_state(manager, started_record.run_id)
 
     assert record.status == "completed"
     assert record.recovery_attempted is True
@@ -144,7 +152,9 @@ def test_run_manager_recovers_placeholder_final_answer(monkeypatch) -> None:  # 
     assert recovery_events, "Expected successful recovery event in timeline"
 
 
-def test_run_manager_fails_when_sources_required_but_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_run_manager_fails_when_sources_required_but_missing(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
     _patch_runtime_defaults(monkeypatch)
     fake_agent = FakeAgent(
         snapshots=[{"messages": [FakeMessage(content="Answer without citations.")]}]
@@ -152,14 +162,14 @@ def test_run_manager_fails_when_sources_required_but_missing(monkeypatch) -> Non
     monkeypatch.setattr(run_manager, "get_agent", lambda: fake_agent)
     monkeypatch.setattr(run_manager, "prompt_requires_sources", lambda _prompt: True)
 
-    manager = run_manager.RunManager()
-    record = asyncio.run(
+    manager = run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    started_record = asyncio.run(
         manager.start_run(
             prompt="Answer with source URLs required",
             thread_id="test-thread-sources",
         )
     )
-    wait_for_terminal_state(record)
+    record = wait_for_terminal_state(manager, started_record.run_id)
 
     assert record.status == "failed"
     assert record.error == "Model returned final answer without source URLs."
