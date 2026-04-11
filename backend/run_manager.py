@@ -120,6 +120,39 @@ class RunManager:
     async def get_events(self, run_id: str) -> list[dict[str, Any]]:
         return self._store.list_events(run_id)
 
+    async def list_runs(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        status: str | None = None,
+        thread_id: str | None = None,
+    ) -> tuple[list[RunRecord], int, dict[str, int]]:
+        states = self._store.list_runs(
+            limit=limit, offset=offset, status=status, thread_id=thread_id
+        )
+        total = self._store.count_runs(status=status, thread_id=thread_id)
+        run_ids = [item.run_id for item in states]
+        event_counts = self._store.event_counts(run_ids)
+        records = [
+            RunRecord(
+                run_id=state.run_id,
+                prompt=state.prompt,
+                thread_id=state.thread_id,
+                status=state.status,
+                started_at=state.started_at,
+                completed_at=state.completed_at,
+                duration_ms=state.duration_ms,
+                events=[],
+                final_answer=state.final_answer,
+                citations=state.citations,
+                error=state.error,
+                recovery_attempted=state.recovery_attempted,
+            )
+            for state in states
+        ]
+        return records, total, event_counts
+
     async def is_done(self, run_id: str) -> bool:
         state = self._store.get_run(run_id)
         if state is None:

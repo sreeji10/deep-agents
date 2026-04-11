@@ -7,8 +7,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, create_engine, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    func,
+    select,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 DEFAULT_DB_URL = os.getenv("RUN_DB_URL", "sqlite:///./.data/runs.db")
 
@@ -152,6 +161,46 @@ class SqlRunStore:
             )
             rows = session.scalars(stmt).all()
             return [self._event_to_dict(row) for row in rows]
+
+    def list_runs(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        status: str | None = None,
+        thread_id: str | None = None,
+    ) -> list[RunState]:
+        with self._session_factory() as session:
+            stmt = select(RunRow)
+            if status:
+                stmt = stmt.where(RunRow.status == status)
+            if thread_id:
+                stmt = stmt.where(RunRow.thread_id == thread_id)
+            stmt = stmt.order_by(RunRow.started_at.desc()).limit(limit).offset(offset)
+            rows = session.scalars(stmt).all()
+            return [self._to_state(row) for row in rows]
+
+    def count_runs(self, *, status: str | None = None, thread_id: str | None = None) -> int:
+        with self._session_factory() as session:
+            stmt = select(func.count()).select_from(RunRow)
+            if status:
+                stmt = stmt.where(RunRow.status == status)
+            if thread_id:
+                stmt = stmt.where(RunRow.thread_id == thread_id)
+            value = session.execute(stmt).scalar_one()
+            return int(value)
+
+    def event_counts(self, run_ids: list[str]) -> dict[str, int]:
+        if not run_ids:
+            return {}
+        with self._session_factory() as session:
+            stmt = (
+                select(RunEventRow.run_id, func.count(RunEventRow.id))
+                .where(RunEventRow.run_id.in_(run_ids))
+                .group_by(RunEventRow.run_id)
+            )
+            rows = session.execute(stmt).all()
+            return {str(run_id): int(count) for run_id, count in rows}
 
     def event_count(self, run_id: str) -> int:
         with self._session_factory() as session:

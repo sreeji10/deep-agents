@@ -2,8 +2,9 @@ import asyncio
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -54,6 +55,13 @@ class RunSummary(BaseModel):
     event_count: int
 
 
+class RunListResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[RunSummary]
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -86,6 +94,36 @@ async def get_run(run_id: str) -> RunSummary:
         recovery_attempted=record.recovery_attempted,
         event_count=len(record.events),
     )
+
+
+@app.get("/runs", response_model=RunListResponse)
+async def list_runs(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    status: Literal["queued", "running", "completed", "failed"] | None = None,
+    thread_id: str | None = None,
+) -> RunListResponse:
+    records, total, event_counts = await manager.list_runs(
+        limit=limit, offset=offset, status=status, thread_id=thread_id
+    )
+    items = [
+        RunSummary(
+            run_id=record.run_id,
+            status=record.status,
+            prompt=record.prompt,
+            thread_id=record.thread_id,
+            started_at=record.started_at.isoformat(),
+            completed_at=record.completed_at.isoformat() if record.completed_at else None,
+            duration_ms=record.duration_ms,
+            final_answer=record.final_answer,
+            citations=record.citations,
+            error=record.error,
+            recovery_attempted=record.recovery_attempted,
+            event_count=event_counts.get(record.run_id, 0),
+        )
+        for record in records
+    ]
+    return RunListResponse(total=total, limit=limit, offset=offset, items=items)
 
 
 @app.get("/runs/{run_id}/stream")

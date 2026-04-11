@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -43,6 +44,19 @@ def _patch_runtime_defaults(monkeypatch) -> None:  # type: ignore[no-untyped-def
     monkeypatch.setattr(
         run_manager, "direct_search_fallback_answer", lambda _prompt: None
     )
+
+
+def _wait_for_completed(client: TestClient, run_id: str, timeout_seconds: float = 3.0) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        response = client.get(f"/runs/{run_id}")
+        if response.status_code == 200 and response.json()["status"] in {
+            "completed",
+            "failed",
+        }:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"Run did not complete in time. run_id={run_id}")
 
 
 def test_runs_api_and_sse_event_contract(  # type: ignore[no-untyped-def]
@@ -108,3 +122,50 @@ def test_runs_api_and_sse_event_contract(  # type: ignore[no-untyped-def]
     assert summary["status"] == "completed"
     assert summary["final_answer"] is not None
     assert summary["event_count"] >= 4
+
+
+def test_list_runs_pagination_and_filters(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_runtime_defaults(monkeypatch)
+    fake_agent = FakeAgent(
+        snapshots=[
+            {"messages": [FakeMessage(content="Searching...")]},
+            {"messages": [FakeMessage(content="Answer URL https://example.com/item")]},
+        ]
+    )
+    monkeypatch.setattr(run_manager, "get_agent", lambda: fake_agent)
+    monkeypatch.setattr(
+        server, "manager", run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    )
+
+    client = TestClient(server.app)
+    created: list[tuple[str, str]] = []
+    for idx, thread_id in enumerate(["alpha", "alpha", "beta"], start=1):
+        response = client.post(
+            "/runs",
+            json={"prompt": f"Prompt {idx}", "thread_id": thread_id},
+        )
+        assert response.status_code == 200
+        run_id = response.json()["run_id"]
+        created.append((run_id, thread_id))
+
+    for run_id, _thread_id in created:
+        _wait_for_completed(client, run_id)
+
+    page = client.get("/runs", params={"limit": 2, "offset": 0})
+    assert page.status_code == 200
+    payload = page.json()
+    assert payload["total"] >= 3
+    assert payload["limit"] == 2
+    assert payload["offset"] == 0
+    assert len(payload["items"]) == 2
+    assert all("event_count" in item for item in payload["items"])
+
+    filtered = client.get("/runs", params={"thread_id": "beta", "status": "completed"})
+    assert filtered.status_code == 200
+    filtered_payload = filtered.json()
+    assert filtered_payload["total"] == 1
+    assert len(filtered_payload["items"]) == 1
+    assert filtered_payload["items"][0]["thread_id"] == "beta"
+    assert filtered_payload["items"][0]["status"] == "completed"
