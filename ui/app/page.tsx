@@ -67,6 +67,8 @@ export default function HomePage() {
   const [runsError, setRunsError] = useState<string | null>(null);
   const [runStatusFilter, setRunStatusFilter] = useState<RunStatusFilter>("all");
   const [runsThreadFilter, setRunsThreadFilter] = useState("");
+  const [autoRefreshRuns, setAutoRefreshRuns] = useState(false);
+  const [autoRefreshSeconds, setAutoRefreshSeconds] = useState(10);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -79,6 +81,18 @@ export default function HomePage() {
     void refreshRuns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runsOffset, runsLimit, runStatusFilter, runsThreadFilter]);
+
+  useEffect(() => {
+    if (!autoRefreshRuns) {
+      return;
+    }
+    const intervalMs = Math.max(3, autoRefreshSeconds) * 1000;
+    const timer = setInterval(() => {
+      void refreshRuns();
+    }, intervalMs);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRefreshRuns, autoRefreshSeconds]);
 
   const filteredEvents = useMemo(
     () => events.filter((event) => matchesFilter(event, filter)),
@@ -246,6 +260,26 @@ export default function HomePage() {
               }}
               placeholder="filter by thread_id"
             />
+          </div>
+          <div className="runs-auto">
+            <label>
+              <input
+                type="checkbox"
+                checked={autoRefreshRuns}
+                onChange={(e) => setAutoRefreshRuns(e.target.checked)}
+              />
+              auto-refresh
+            </label>
+            <select
+              value={String(autoRefreshSeconds)}
+              onChange={(e) => setAutoRefreshSeconds(Number(e.target.value))}
+              disabled={!autoRefreshRuns}
+            >
+              <option value="5">every 5s</option>
+              <option value="10">every 10s</option>
+              <option value="20">every 20s</option>
+              <option value="30">every 30s</option>
+            </select>
           </div>
           <ul className="runs-list">
             {recentRuns.map((item) => (

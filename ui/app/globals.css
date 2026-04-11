@@ -172,6 +172,21 @@ textarea {
   gap: 8px;
 }
 
+.runs-auto {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.runs-auto label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
 select {
   width: 100%;
   border-radius: 12px;
