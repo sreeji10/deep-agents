@@ -2,11 +2,12 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import { RunEvent, RunSummary } from "../lib/types";
+import { RunEvent, RunListResponse, RunSummary } from "../lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
 type TimelineFilter = "all" | "tools" | "subagents" | "errors";
+type RunStatusFilter = "all" | "queued" | "running" | "completed" | "failed";
 
 function getEventTime(timestamp: string): string {
   const date = new Date(timestamp);
@@ -58,6 +59,14 @@ export default function HomePage() {
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<TimelineFilter>("all");
+  const [recentRuns, setRecentRuns] = useState<RunSummary[]>([]);
+  const [runsTotal, setRunsTotal] = useState(0);
+  const [runsLimit] = useState(8);
+  const [runsOffset, setRunsOffset] = useState(0);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError] = useState<string | null>(null);
+  const [runStatusFilter, setRunStatusFilter] = useState<RunStatusFilter>("all");
+  const [runsThreadFilter, setRunsThreadFilter] = useState("");
   const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -65,6 +74,11 @@ export default function HomePage() {
       eventSourceRef.current?.close();
     };
   }, []);
+
+  useEffect(() => {
+    void refreshRuns();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runsOffset, runsLimit, runStatusFilter, runsThreadFilter]);
 
   const filteredEvents = useMemo(
     () => events.filter((event) => matchesFilter(event, filter)),
@@ -92,6 +106,36 @@ export default function HomePage() {
     }
     const payload = (await response.json()) as RunSummary;
     setSummary(payload);
+  }
+
+  async function refreshRuns() {
+    setRunsLoading(true);
+    setRunsError(null);
+    const params = new URLSearchParams({
+      limit: String(runsLimit),
+      offset: String(runsOffset)
+    });
+    if (runStatusFilter !== "all") {
+      params.set("status", runStatusFilter);
+    }
+    const threadFilterValue = runsThreadFilter.trim();
+    if (threadFilterValue) {
+      params.set("thread_id", threadFilterValue);
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/runs?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch run list (${response.status})`);
+      }
+      const payload = (await response.json()) as RunListResponse;
+      setRecentRuns(payload.items);
+      setRunsTotal(payload.total);
+    } catch (err) {
+      setRunsError(err instanceof Error ? err.message : "Failed to load runs.");
+    } finally {
+      setRunsLoading(false);
+    }
   }
 
   function connectStream(id: string) {
@@ -143,6 +187,25 @@ export default function HomePage() {
     const payload = (await response.json()) as { run_id: string };
     setRunId(payload.run_id);
     connectStream(payload.run_id);
+    void refreshRuns();
+  }
+
+  async function handleSelectRun(selectedRunId: string) {
+    setError(null);
+    setRunId(selectedRunId);
+    setEvents([]);
+    await refreshSummary(selectedRunId);
+    connectStream(selectedRunId);
+    const selected = recentRuns.find((item) => item.run_id === selectedRunId);
+    if (selected) {
+      setRunStatus(
+        selected.status === "completed" || selected.status === "failed"
+          ? selected.status
+          : "running"
+      );
+      setThreadId(selected.thread_id);
+      setPrompt(selected.prompt);
+    }
   }
 
   return (
@@ -154,6 +217,81 @@ export default function HomePage() {
       </header>
 
       <section className="grid">
+        <article className="panel runs">
+          <div className="runs-head">
+            <h2>Recent Runs</h2>
+            <button className="filter-btn" type="button" onClick={() => void refreshRuns()}>
+              refresh
+            </button>
+          </div>
+          <div className="runs-controls">
+            <select
+              value={runStatusFilter}
+              onChange={(e) => {
+                setRunsOffset(0);
+                setRunStatusFilter(e.target.value as RunStatusFilter);
+              }}
+            >
+              <option value="all">all statuses</option>
+              <option value="queued">queued</option>
+              <option value="running">running</option>
+              <option value="completed">completed</option>
+              <option value="failed">failed</option>
+            </select>
+            <input
+              value={runsThreadFilter}
+              onChange={(e) => {
+                setRunsOffset(0);
+                setRunsThreadFilter(e.target.value);
+              }}
+              placeholder="filter by thread_id"
+            />
+          </div>
+          <ul className="runs-list">
+            {recentRuns.map((item) => (
+              <li key={item.run_id}>
+                <button
+                  className={`run-item ${runId === item.run_id ? "is-selected" : ""}`}
+                  onClick={() => void handleSelectRun(item.run_id)}
+                  type="button"
+                >
+                  <div>
+                    <strong>{item.run_id}</strong>
+                    <small>{item.thread_id}</small>
+                  </div>
+                  <div>
+                    <span className={`chip chip-${item.status}`}>{item.status}</span>
+                    <small>{item.event_count} events</small>
+                  </div>
+                </button>
+              </li>
+            ))}
+            {!runsLoading && !recentRuns.length ? <li className="empty">No runs found.</li> : null}
+          </ul>
+          {runsError ? <p className="error">{runsError}</p> : null}
+          <div className="runs-pagination">
+            <button
+              className="filter-btn"
+              type="button"
+              onClick={() => setRunsOffset((prev) => Math.max(0, prev - runsLimit))}
+              disabled={runsOffset === 0 || runsLoading}
+            >
+              prev
+            </button>
+            <span>
+              {runsOffset + 1}-{Math.min(runsOffset + runsLimit, runsTotal)} of {runsTotal}
+            </span>
+            <button
+              className="filter-btn"
+              type="button"
+              onClick={() => setRunsOffset((prev) => prev + runsLimit)}
+              disabled={runsOffset + runsLimit >= runsTotal || runsLoading}
+            >
+              next
+            </button>
+          </div>
+        </article>
+
         <article className="panel composer">
           <h2>Prompt Composer</h2>
           <form onSubmit={handleRun}>

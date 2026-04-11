@@ -22,3 +22,10 @@ export type RunSummary = {
   recovery_attempted: boolean;
   event_count: number;
 };
+
+export type RunListResponse = {
+  total: number;
+  limit: number;
+  offset: number;
+  items: RunSummary[];
+};
