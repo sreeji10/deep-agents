@@ -216,6 +216,16 @@ select {
   border-color: var(--red);
 }
 
+.chip-canceled {
+  border-color: #5a6a7f;
+}
+
+.actions-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+}
+
 .timeline-top {
   display: flex;
   justify-content: space-between;

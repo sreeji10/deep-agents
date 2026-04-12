@@ -7,7 +7,8 @@ import { RunEvent, RunListResponse, RunSummary } from "../lib/types";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
 type TimelineFilter = "all" | "tools" | "subagents" | "errors";
-type RunStatusFilter = "all" | "queued" | "running" | "completed" | "failed";
+type RunStatusFilter = "all" | "queued" | "running" | "completed" | "failed" | "canceled";
+type RunStatus = "idle" | "running" | "completed" | "failed" | "canceled";
 
 function getEventTime(timestamp: string): string {
   const date = new Date(timestamp);
@@ -56,7 +57,7 @@ export default function HomePage() {
   const [runId, setRunId] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [summary, setSummary] = useState<RunSummary | null>(null);
-  const [runStatus, setRunStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
+  const [runStatus, setRunStatus] = useState<RunStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<TimelineFilter>("all");
   const [recentRuns, setRecentRuns] = useState<RunSummary[]>([]);
@@ -167,6 +168,12 @@ export default function HomePage() {
         source.close();
         void refreshSummary(id).catch(() => undefined);
       }
+      if (event.type === "run_canceled") {
+        setRunStatus("canceled");
+        setError(String(event.payload.error ?? "Run canceled"));
+        source.close();
+        void refreshSummary(id).catch(() => undefined);
+      }
       if (event.type === "run_completed") {
         setRunStatus("completed");
         source.close();
@@ -204,6 +211,37 @@ export default function HomePage() {
     void refreshRuns();
   }
 
+  async function handleCancelRun() {
+    if (!runId) return;
+    setError(null);
+    const response = await fetch(`${API_BASE}/runs/${runId}/cancel`, { method: "POST" });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      setError(payload?.detail ?? `Failed to cancel run (${response.status})`);
+      return;
+    }
+    void refreshRuns();
+    await refreshSummary(runId);
+  }
+
+  async function handleRetryRun() {
+    if (!runId) return;
+    setError(null);
+    const response = await fetch(`${API_BASE}/runs/${runId}/retry`, { method: "POST" });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      setError(payload?.detail ?? `Failed to retry run (${response.status})`);
+      return;
+    }
+    const payload = (await response.json()) as { run_id: string; status: string };
+    setRunId(payload.run_id);
+    setSummary(null);
+    setEvents([]);
+    setRunStatus(payload.status === "running" ? "running" : "idle");
+    connectStream(payload.run_id);
+    void refreshRuns();
+  }
+
   async function handleSelectRun(selectedRunId: string) {
     setError(null);
     setRunId(selectedRunId);
@@ -212,11 +250,13 @@ export default function HomePage() {
     connectStream(selectedRunId);
     const selected = recentRuns.find((item) => item.run_id === selectedRunId);
     if (selected) {
-      setRunStatus(
-        selected.status === "completed" || selected.status === "failed"
+      const nextStatus: RunStatus =
+        selected.status === "completed" ||
+        selected.status === "failed" ||
+        selected.status === "canceled"
           ? selected.status
-          : "running"
-      );
+          : "running";
+      setRunStatus(nextStatus);
       setThreadId(selected.thread_id);
       setPrompt(selected.prompt);
     }
@@ -251,6 +291,7 @@ export default function HomePage() {
               <option value="running">running</option>
               <option value="completed">completed</option>
               <option value="failed">failed</option>
+              <option value="canceled">canceled</option>
             </select>
             <input
               value={runsThreadFilter}
@@ -355,6 +396,24 @@ export default function HomePage() {
           <div className="status-row">
             <span className={`chip chip-${runStatus}`}>status: {runStatus}</span>
             {runId ? <span className="chip">run: {runId}</span> : null}
+          </div>
+          <div className="actions-row">
+            <button
+              className="filter-btn"
+              type="button"
+              onClick={() => void handleCancelRun()}
+              disabled={!runId || runStatus !== "running"}
+            >
+              Cancel Run
+            </button>
+            <button
+              className="filter-btn"
+              type="button"
+              onClick={() => void handleRetryRun()}
+              disabled={!runId || !["completed", "failed", "canceled"].includes(runStatus)}
+            >
+              Retry Run
+            </button>
           </div>
           {error ? <p className="error">{error}</p> : null}
         </article>
