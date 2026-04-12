@@ -69,10 +69,14 @@ class RunManager:
         self._store = SqlRunStore(db_url=db_url) if db_url else SqlRunStore()
         self._subscribers: dict[str, list[_Subscriber]] = {}
         self._subscribers_lock = threading.Lock()
+        self._cancel_requests: dict[str, threading.Event] = {}
+        self._cancel_lock = threading.Lock()
 
     async def start_run(self, prompt: str, thread_id: str) -> RunRecord:
         run_id = f"run_{uuid.uuid4().hex[:12]}"
         state = self._store.create_run(run_id=run_id, prompt=prompt, thread_id=thread_id)
+        with self._cancel_lock:
+            self._cancel_requests[run_id] = threading.Event()
 
         self._push_event(
             run_id=run_id,
@@ -157,7 +161,52 @@ class RunManager:
         state = self._store.get_run(run_id)
         if state is None:
             return True
-        return state.status in {"completed", "failed"}
+        return state.status in {"completed", "failed", "canceled"}
+
+    async def cancel_run(self, run_id: str) -> tuple[RunRecord | None, bool, str]:
+        record = await self.get_run(run_id)
+        if record is None:
+            return None, False, "Run not found"
+
+        if record.status in {"completed", "failed", "canceled"}:
+            return record, False, f"Cannot cancel run in '{record.status}' state"
+
+        with self._cancel_lock:
+            cancel_signal = self._cancel_requests.get(run_id)
+            if cancel_signal is None:
+                cancel_signal = threading.Event()
+                self._cancel_requests[run_id] = cancel_signal
+            already_requested = cancel_signal.is_set()
+            cancel_signal.set()
+
+        if not already_requested:
+            self._push_event(
+                run_id=run_id,
+                event_type="run_cancellation_requested",
+                actor="system",
+                label="Cancellation requested",
+                payload={},
+                level="warn",
+            )
+        refreshed = await self.get_run(run_id)
+        return refreshed, True, "Cancellation requested"
+
+    async def retry_run(self, run_id: str) -> tuple[RunRecord | None, str]:
+        record = await self.get_run(run_id)
+        if record is None:
+            return None, "Run not found"
+        if record.status not in {"completed", "failed", "canceled"}:
+            return None, f"Cannot retry run in '{record.status}' state"
+
+        self._push_event(
+            run_id=run_id,
+            event_type="run_retried",
+            actor="system",
+            label="Run retried",
+            payload={},
+        )
+        retried = await self.start_run(prompt=record.prompt, thread_id=record.thread_id)
+        return retried, "Retry started"
 
     def _run_sync(self, run_id: str) -> None:
         state = self._store.get_run(run_id)
@@ -174,6 +223,10 @@ class RunManager:
         last_message_count = 0
 
         try:
+            if self._is_cancel_requested(run_id):
+                self._mark_canceled(run_id, "Run canceled by user.")
+                return
+
             stream_iter = agent.stream(
                 {"messages": [{"role": "user", "content": prompt}]},
                 config={"configurable": {"thread_id": thread_id}},
@@ -190,6 +243,10 @@ class RunManager:
 
             latest_messages: list[Any] = []
             for snapshot in stream_iter:
+                if self._is_cancel_requested(run_id):
+                    self._mark_canceled(run_id, "Run canceled by user.")
+                    return
+
                 messages = snapshot.get("messages", [])
                 if not isinstance(messages, list):
                     continue
@@ -235,6 +292,10 @@ class RunManager:
                                     "content_preview": message_content[:240],
                                 },
                             )
+
+            if self._is_cancel_requested(run_id):
+                self._mark_canceled(run_id, "Run canceled by user.")
+                return
 
             final_answer = (
                 str(latest_messages[-1].content) if latest_messages else "(No response)"
@@ -390,6 +451,8 @@ class RunManager:
                 label="Run completed",
                 payload={"duration_ms": duration_ms},
             )
+            with self._cancel_lock:
+                self._cancel_requests.pop(run_id, None)
         except RequestException as exc:
             self._fail_run(
                 run_id=run_id,
@@ -437,6 +500,38 @@ class RunManager:
             payload={"error": message},
             level="error",
         )
+        with self._cancel_lock:
+            self._cancel_requests.pop(run_id, None)
+
+    def _mark_canceled(self, run_id: str, message: str) -> None:
+        state = self._store.get_run(run_id)
+        if state is None or state.status == "canceled":
+            return
+        completed_at = _utc_now()
+        duration_ms = int((completed_at - state.started_at).total_seconds() * 1000)
+        self._store.update_run(
+            run_id,
+            status="canceled",
+            error=message,
+            completed_at=completed_at,
+            duration_ms=duration_ms,
+            recovery_attempted=state.recovery_attempted,
+        )
+        self._push_event(
+            run_id=run_id,
+            event_type="run_canceled",
+            actor="system",
+            label="Run canceled",
+            payload={"error": message},
+            level="warn",
+        )
+        with self._cancel_lock:
+            self._cancel_requests.pop(run_id, None)
+
+    def _is_cancel_requested(self, run_id: str) -> bool:
+        with self._cancel_lock:
+            signal = self._cancel_requests.get(run_id)
+            return signal.is_set() if signal else False
 
     def _push_event(
         self,

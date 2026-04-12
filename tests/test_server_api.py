@@ -32,6 +32,18 @@ class FakeAgent:
             yield snapshot
 
 
+class SlowFakeAgent:
+    def __init__(self, *, snapshots: list[dict[str, Any]], sleep_seconds: float = 0.15) -> None:
+        self._snapshots = snapshots
+        self._sleep_seconds = sleep_seconds
+
+    def stream(self, *_args: Any, **_kwargs: Any):  # noqa: ANN002, ANN003
+        for idx, snapshot in enumerate(self._snapshots):
+            if idx > 0:
+                time.sleep(self._sleep_seconds)
+            yield snapshot
+
+
 def _patch_runtime_defaults(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(run_manager, "prompt_requires_sources", lambda _prompt: False)
     monkeypatch.setattr(run_manager, "needs_recovery", lambda _prompt, _answer: False)
@@ -53,6 +65,7 @@ def _wait_for_completed(client: TestClient, run_id: str, timeout_seconds: float 
         if response.status_code == 200 and response.json()["status"] in {
             "completed",
             "failed",
+            "canceled",
         }:
             return
         time.sleep(0.02)
@@ -169,3 +182,75 @@ def test_list_runs_pagination_and_filters(  # type: ignore[no-untyped-def]
     assert len(filtered_payload["items"]) == 1
     assert filtered_payload["items"][0]["thread_id"] == "beta"
     assert filtered_payload["items"][0]["status"] == "completed"
+
+
+def test_cancel_run_endpoint_cancels_running_run(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_runtime_defaults(monkeypatch)
+    fake_agent = SlowFakeAgent(
+        snapshots=[
+            {"messages": [FakeMessage(content="Initial reasoning...")]},
+            {"messages": [FakeMessage(content="Final answer https://example.com/final")]},
+        ]
+    )
+    monkeypatch.setattr(run_manager, "get_agent", lambda: fake_agent)
+    monkeypatch.setattr(
+        server, "manager", run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    )
+
+    client = TestClient(server.app)
+    create_response = client.post(
+        "/runs",
+        json={"prompt": "Cancel me", "thread_id": "cancel-thread"},
+    )
+    assert create_response.status_code == 200
+    run_id = create_response.json()["run_id"]
+
+    cancel_response = client.post(f"/runs/{run_id}/cancel")
+    assert cancel_response.status_code == 200
+    cancel_payload = cancel_response.json()
+    assert cancel_payload["cancel_requested"] is True
+
+    _wait_for_completed(client, run_id)
+    summary = client.get(f"/runs/{run_id}").json()
+    assert summary["status"] == "canceled"
+    assert "canceled" in (summary["error"] or "").lower()
+
+
+def test_retry_run_endpoint_creates_new_run_and_blocks_non_terminal(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_runtime_defaults(monkeypatch)
+    fake_agent = SlowFakeAgent(
+        snapshots=[
+            {"messages": [FakeMessage(content="Working...")]},
+            {"messages": [FakeMessage(content="Final answer https://example.com/retry")]},
+        ],
+        sleep_seconds=0.1,
+    )
+    monkeypatch.setattr(run_manager, "get_agent", lambda: fake_agent)
+    monkeypatch.setattr(
+        server, "manager", run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    )
+
+    client = TestClient(server.app)
+    create_response = client.post(
+        "/runs",
+        json={"prompt": "Retry me", "thread_id": "retry-thread"},
+    )
+    assert create_response.status_code == 200
+    first_run_id = create_response.json()["run_id"]
+
+    retry_while_running = client.post(f"/runs/{first_run_id}/retry")
+    assert retry_while_running.status_code == 409
+
+    _wait_for_completed(client, first_run_id)
+    retry_response = client.post(f"/runs/{first_run_id}/retry")
+    assert retry_response.status_code == 200
+    second_run_id = retry_response.json()["run_id"]
+    assert second_run_id != first_run_id
+
+    _wait_for_completed(client, second_run_id)
+    second_summary = client.get(f"/runs/{second_run_id}").json()
+    assert second_summary["status"] == "completed"

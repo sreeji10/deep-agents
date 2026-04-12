@@ -40,6 +40,13 @@ class CreateRunResponse(BaseModel):
     status: str
 
 
+class CancelRunResponse(BaseModel):
+    run_id: str
+    status: str
+    cancel_requested: bool
+    detail: str
+
+
 class RunSummary(BaseModel):
     run_id: str
     status: str
@@ -75,6 +82,31 @@ async def create_run(payload: CreateRunRequest) -> CreateRunResponse:
     return CreateRunResponse(run_id=record.run_id, status=record.status)
 
 
+@app.post("/runs/{run_id}/cancel", response_model=CancelRunResponse)
+async def cancel_run(run_id: str) -> CancelRunResponse:
+    record, cancel_requested, detail = await manager.cancel_run(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=detail)
+    if not cancel_requested:
+        raise HTTPException(status_code=409, detail=detail)
+    return CancelRunResponse(
+        run_id=record.run_id,
+        status=record.status,
+        cancel_requested=cancel_requested,
+        detail=detail,
+    )
+
+
+@app.post("/runs/{run_id}/retry", response_model=CreateRunResponse)
+async def retry_run(run_id: str) -> CreateRunResponse:
+    record, detail = await manager.retry_run(run_id)
+    if record is None:
+        if detail == "Run not found":
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=409, detail=detail)
+    return CreateRunResponse(run_id=record.run_id, status=record.status)
+
+
 @app.get("/runs/{run_id}", response_model=RunSummary)
 async def get_run(run_id: str) -> RunSummary:
     record = await manager.get_run(run_id)
@@ -100,7 +132,7 @@ async def get_run(run_id: str) -> RunSummary:
 async def list_runs(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    status: Literal["queued", "running", "completed", "failed"] | None = None,
+    status: Literal["queued", "running", "completed", "failed", "canceled"] | None = None,
     thread_id: str | None = None,
 ) -> RunListResponse:
     records, total, event_counts = await manager.list_runs(
