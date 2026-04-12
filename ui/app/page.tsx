@@ -9,6 +9,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 type TimelineFilter = "all" | "tools" | "subagents" | "errors";
 type RunStatusFilter = "all" | "queued" | "running" | "completed" | "failed" | "canceled";
 type RunStatus = "idle" | "running" | "completed" | "failed" | "canceled";
+const STORAGE_KEYS = {
+  runStatusFilter: "deep_agents.run_status_filter",
+  runsThreadFilter: "deep_agents.runs_thread_filter",
+  autoRefreshRuns: "deep_agents.auto_refresh_runs",
+  autoRefreshSeconds: "deep_agents.auto_refresh_seconds"
+} as const;
 
 function getEventTime(timestamp: string): string {
   const date = new Date(timestamp);
@@ -70,6 +76,7 @@ export default function HomePage() {
   const [runsThreadFilter, setRunsThreadFilter] = useState("");
   const [autoRefreshRuns, setAutoRefreshRuns] = useState(false);
   const [autoRefreshSeconds, setAutoRefreshSeconds] = useState(10);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -79,9 +86,63 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
+    try {
+      const storedStatus = localStorage.getItem(STORAGE_KEYS.runStatusFilter);
+      if (
+        storedStatus === "all" ||
+        storedStatus === "queued" ||
+        storedStatus === "running" ||
+        storedStatus === "completed" ||
+        storedStatus === "failed" ||
+        storedStatus === "canceled"
+      ) {
+        setRunStatusFilter(storedStatus);
+      }
+
+      const storedThread = localStorage.getItem(STORAGE_KEYS.runsThreadFilter);
+      if (typeof storedThread === "string") {
+        setRunsThreadFilter(storedThread);
+      }
+
+      const storedAutoRefresh = localStorage.getItem(STORAGE_KEYS.autoRefreshRuns);
+      if (storedAutoRefresh === "true" || storedAutoRefresh === "false") {
+        setAutoRefreshRuns(storedAutoRefresh === "true");
+      }
+
+      const storedSeconds = Number(localStorage.getItem(STORAGE_KEYS.autoRefreshSeconds));
+      if ([5, 10, 20, 30].includes(storedSeconds)) {
+        setAutoRefreshSeconds(storedSeconds);
+      }
+    } finally {
+      setPrefsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!prefsLoaded) return;
+    localStorage.setItem(STORAGE_KEYS.runStatusFilter, runStatusFilter);
+  }, [prefsLoaded, runStatusFilter]);
+
+  useEffect(() => {
+    if (!prefsLoaded) return;
+    localStorage.setItem(STORAGE_KEYS.runsThreadFilter, runsThreadFilter);
+  }, [prefsLoaded, runsThreadFilter]);
+
+  useEffect(() => {
+    if (!prefsLoaded) return;
+    localStorage.setItem(STORAGE_KEYS.autoRefreshRuns, String(autoRefreshRuns));
+  }, [prefsLoaded, autoRefreshRuns]);
+
+  useEffect(() => {
+    if (!prefsLoaded) return;
+    localStorage.setItem(STORAGE_KEYS.autoRefreshSeconds, String(autoRefreshSeconds));
+  }, [prefsLoaded, autoRefreshSeconds]);
+
+  useEffect(() => {
+    if (!prefsLoaded) return;
     void refreshRuns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runsOffset, runsLimit, runStatusFilter, runsThreadFilter]);
+  }, [prefsLoaded, runsOffset, runsLimit, runStatusFilter, runsThreadFilter]);
 
   useEffect(() => {
     if (!autoRefreshRuns) {
