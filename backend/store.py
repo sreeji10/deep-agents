@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ from sqlalchemy import (
     create_engine,
     func,
     select,
+    delete,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -206,6 +207,16 @@ class SqlRunStore:
         with self._session_factory() as session:
             stmt = select(RunEventRow.id).where(RunEventRow.run_id == run_id)
             return len(session.scalars(stmt).all())
+
+    def prune_events_older_than(self, *, older_than_days: int) -> tuple[int, datetime]:
+        safe_days = max(1, older_than_days)
+        cutoff = _utc_now() - timedelta(days=safe_days)
+        with self._session_factory() as session:
+            stmt = delete(RunEventRow).where(RunEventRow.timestamp < cutoff)
+            result = session.execute(stmt)
+            session.commit()
+            deleted = int(result.rowcount or 0)
+        return deleted, cutoff
 
     @staticmethod
     def _to_state(row: RunRow) -> RunState:

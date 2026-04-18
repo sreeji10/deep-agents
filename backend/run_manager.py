@@ -163,6 +163,9 @@ class RunManager:
             return True
         return state.status in {"completed", "failed", "canceled"}
 
+    async def prune_events(self, *, older_than_days: int) -> tuple[int, datetime]:
+        return self._store.prune_events_older_than(older_than_days=older_than_days)
+
     async def cancel_run(self, run_id: str) -> tuple[RunRecord | None, bool, str]:
         record = await self.get_run(run_id)
         if record is None:

@@ -69,9 +69,27 @@ class RunListResponse(BaseModel):
     items: list[RunSummary]
 
 
+class PruneEventsResponse(BaseModel):
+    deleted_events: int
+    older_than_days: int
+    cutoff_timestamp: str
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/maintenance/prune-events", response_model=PruneEventsResponse)
+async def prune_events(
+    older_than_days: int = Query(default=30, ge=1, le=3650),
+) -> PruneEventsResponse:
+    deleted_count, cutoff = await manager.prune_events(older_than_days=older_than_days)
+    return PruneEventsResponse(
+        deleted_events=deleted_count,
+        older_than_days=older_than_days,
+        cutoff_timestamp=cutoff.isoformat(),
+    )
 
 
 @app.post("/runs", response_model=CreateRunResponse)

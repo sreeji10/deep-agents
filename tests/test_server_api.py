@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import time
 from typing import Any
@@ -321,3 +322,70 @@ def test_list_runs_empty_page_and_large_offset(  # type: ignore[no-untyped-def]
     assert large_offset_payload["total"] >= 1
     assert large_offset_payload["offset"] == 10_000
     assert large_offset_payload["items"] == []
+
+
+def test_prune_events_endpoint_deletes_only_old_events(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_runtime_defaults(monkeypatch)
+    fake_agent = FakeAgent(
+        snapshots=[
+            {"messages": [FakeMessage(content="Prune seed step")]},
+            {"messages": [FakeMessage(content="Prune seed final https://example.com/prune")]},
+        ]
+    )
+    monkeypatch.setattr(run_manager, "get_agent", lambda: fake_agent)
+    monkeypatch.setattr(
+        server, "manager", run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    )
+    client = TestClient(server.app)
+
+    create_response = client.post(
+        "/runs",
+        json={"prompt": "Seed for prune", "thread_id": "prune-thread"},
+    )
+    assert create_response.status_code == 200
+    run_id = create_response.json()["run_id"]
+    _wait_for_completed(client, run_id)
+
+    assert server.manager._store.event_count(run_id) > 0  # noqa: SLF001
+
+    now = datetime.now(UTC)
+    old_timestamp = (now - timedelta(days=90)).isoformat().replace("+00:00", "Z")
+    recent_timestamp = (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+
+    server.manager._store.add_event(  # noqa: SLF001
+        {
+            "run_id": run_id,
+            "timestamp": old_timestamp,
+            "type": "seed_old_event",
+            "actor": "test",
+            "label": "Old seeded event",
+            "payload": {},
+            "level": "info",
+        }
+    )
+    server.manager._store.add_event(  # noqa: SLF001
+        {
+            "run_id": run_id,
+            "timestamp": recent_timestamp,
+            "type": "seed_recent_event",
+            "actor": "test",
+            "label": "Recent seeded event",
+            "payload": {},
+            "level": "info",
+        }
+    )
+
+    before_count = server.manager._store.event_count(run_id)  # noqa: SLF001
+    prune_response = client.post("/maintenance/prune-events", params={"older_than_days": 30})
+    assert prune_response.status_code == 200
+    prune_payload = prune_response.json()
+    assert prune_payload["deleted_events"] >= 1
+    assert prune_payload["older_than_days"] == 30
+
+    after_events = server.manager._store.list_events(run_id)  # noqa: SLF001
+    after_count = len(after_events)
+    assert after_count == before_count - prune_payload["deleted_events"]
+    assert all(event["type"] != "seed_old_event" for event in after_events)
+    assert any(event["type"] == "seed_recent_event" for event in after_events)
