@@ -254,3 +254,70 @@ def test_retry_run_endpoint_creates_new_run_and_blocks_non_terminal(  # type: ig
     _wait_for_completed(client, second_run_id)
     second_summary = client.get(f"/runs/{second_run_id}").json()
     assert second_summary["status"] == "completed"
+
+
+def test_list_runs_invalid_status_returns_422(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_runtime_defaults(monkeypatch)
+    monkeypatch.setattr(
+        server, "manager", run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    )
+
+    client = TestClient(server.app)
+    response = client.get("/runs", params={"status": "unknown"})
+    assert response.status_code == 422
+
+
+def test_list_runs_limit_bounds_return_422(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_runtime_defaults(monkeypatch)
+    monkeypatch.setattr(
+        server, "manager", run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    )
+
+    client = TestClient(server.app)
+    too_small = client.get("/runs", params={"limit": 0})
+    assert too_small.status_code == 422
+
+    too_large = client.get("/runs", params={"limit": 101})
+    assert too_large.status_code == 422
+
+
+def test_list_runs_empty_page_and_large_offset(  # type: ignore[no-untyped-def]
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_runtime_defaults(monkeypatch)
+    fake_agent = FakeAgent(
+        snapshots=[
+            {"messages": [FakeMessage(content="Searching...")]},
+            {"messages": [FakeMessage(content="Answer URL https://example.com/item")]},
+        ]
+    )
+    monkeypatch.setattr(run_manager, "get_agent", lambda: fake_agent)
+    monkeypatch.setattr(
+        server, "manager", run_manager.RunManager(db_url=f"sqlite:///{tmp_path / 'runs.db'}")
+    )
+    client = TestClient(server.app)
+
+    empty = client.get("/runs", params={"limit": 20, "offset": 0})
+    assert empty.status_code == 200
+    empty_payload = empty.json()
+    assert empty_payload["total"] == 0
+    assert empty_payload["items"] == []
+
+    create_response = client.post(
+        "/runs",
+        json={"prompt": "Prompt 1", "thread_id": "offset-thread"},
+    )
+    assert create_response.status_code == 200
+    run_id = create_response.json()["run_id"]
+    _wait_for_completed(client, run_id)
+
+    large_offset = client.get("/runs", params={"limit": 20, "offset": 10_000})
+    assert large_offset.status_code == 200
+    large_offset_payload = large_offset.json()
+    assert large_offset_payload["total"] >= 1
+    assert large_offset_payload["offset"] == 10_000
+    assert large_offset_payload["items"] == []
