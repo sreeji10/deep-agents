@@ -11,6 +11,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Integer,
+    Index,
     String,
     Text,
     create_engine,
@@ -32,9 +33,11 @@ class RunRow(Base):
 
     run_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    thread_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     final_answer: Mapped[str | None] = mapped_column(Text)
@@ -47,6 +50,7 @@ class RunRow(Base):
 
 class RunEventRow(Base):
     __tablename__ = "run_events"
+    __table_args__ = (Index("ix_run_events_run_id_id", "run_id", "id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
