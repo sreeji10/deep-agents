@@ -12,8 +12,6 @@ type RunStatus = "idle" | "running" | "completed" | "failed" | "canceled";
 const STORAGE_KEYS = {
   runStatusFilter: "deep_agents.run_status_filter",
   runsThreadFilter: "deep_agents.runs_thread_filter",
-  autoRefreshRuns: "deep_agents.auto_refresh_runs",
-  autoRefreshSeconds: "deep_agents.auto_refresh_seconds"
 } as const;
 
 function getEventTime(timestamp: string): string {
@@ -56,9 +54,7 @@ function eventDetail(event: RunEvent): string | null {
 }
 
 export default function HomeClient() {
-  const [prompt, setPrompt] = useState(
-    "Use the researcher subagent to find the latest Kerala election timeline and include source URLs."
-  );
+  const [prompt, setPrompt] = useState("");
   const [threadId, setThreadId] = useState("demo-thread");
   const [runId, setRunId] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
@@ -74,10 +70,9 @@ export default function HomeClient() {
   const [runsError, setRunsError] = useState<string | null>(null);
   const [runStatusFilter, setRunStatusFilter] = useState<RunStatusFilter>("all");
   const [runsThreadFilter, setRunsThreadFilter] = useState("");
-  const [autoRefreshRuns, setAutoRefreshRuns] = useState(false);
-  const [autoRefreshSeconds, setAutoRefreshSeconds] = useState(10);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -104,16 +99,6 @@ export default function HomeClient() {
       if (typeof storedThread === "string") {
         setRunsThreadFilter(storedThread);
       }
-
-      const storedAutoRefresh = localStorage.getItem(STORAGE_KEYS.autoRefreshRuns);
-      if (storedAutoRefresh === "true" || storedAutoRefresh === "false") {
-        setAutoRefreshRuns(storedAutoRefresh === "true");
-      }
-
-      const storedSeconds = Number(localStorage.getItem(STORAGE_KEYS.autoRefreshSeconds));
-      if ([5, 10, 20, 30].includes(storedSeconds)) {
-        setAutoRefreshSeconds(storedSeconds);
-      }
     } finally {
       setPrefsLoaded(true);
     }
@@ -130,16 +115,6 @@ export default function HomeClient() {
   }, [prefsLoaded, runsThreadFilter]);
 
   useEffect(() => {
-    if (!prefsLoaded) return;
-    localStorage.setItem(STORAGE_KEYS.autoRefreshRuns, String(autoRefreshRuns));
-  }, [prefsLoaded, autoRefreshRuns]);
-
-  useEffect(() => {
-    if (!prefsLoaded) return;
-    localStorage.setItem(STORAGE_KEYS.autoRefreshSeconds, String(autoRefreshSeconds));
-  }, [prefsLoaded, autoRefreshSeconds]);
-
-  useEffect(() => {
     fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(5000) })
       .then((res) => {
         if (!res.ok) throw new Error(`Health check failed (${res.status})`);
@@ -153,18 +128,6 @@ export default function HomeClient() {
     void refreshRuns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefsLoaded, runsOffset, runsLimit, runStatusFilter, runsThreadFilter]);
-
-  useEffect(() => {
-    if (!autoRefreshRuns) {
-      return;
-    }
-    const intervalMs = Math.max(3, autoRefreshSeconds) * 1000;
-    const timer = setInterval(() => {
-      void refreshRuns();
-    }, intervalMs);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefreshRuns, autoRefreshSeconds]);
 
   const filteredEvents = useMemo(
     () => events.filter((event) => matchesFilter(event, filter)),
@@ -331,27 +294,23 @@ export default function HomeClient() {
       setThreadId(selected.thread_id);
       setPrompt(selected.prompt);
     }
+    setSidebarOpen(false);
   }
 
   return (
-    <main className="app-shell">
-      <header className="hero">
-        <p className="hero-kicker">Deep Agents</p>
-        <h1>Operator Console</h1>
-        <p>Run prompts with crisp real-time feedback, readable event traces, and reliable final outputs.</p>
-      </header>
-
+    <div className="app-shell">
       {connectError ? <div className="connect-error">{connectError}</div> : null}
 
-      <section className="grid">
-        <article className="panel runs">
-          <div className="runs-head">
-            <h2>Recent Runs</h2>
-            <button className="filter-btn" type="button" onClick={() => void refreshRuns()}>
-              refresh
+      <div className="app-layout">
+        <aside className={`sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
+          <div className="sidebar-header">
+            <span className="sidebar-title">Runs</span>
+            <button className="sidebar-close" type="button" onClick={() => setSidebarOpen(false)} aria-label="Close sidebar">
+              &times;
             </button>
           </div>
-          <div className="runs-controls">
+
+          <div className="sidebar-controls">
             <select
               value={runStatusFilter}
               onChange={(e) => {
@@ -372,43 +331,31 @@ export default function HomeClient() {
                 setRunsOffset(0);
                 setRunsThreadFilter(e.target.value);
               }}
-              placeholder="filter by thread_id"
+              placeholder="filter thread..."
             />
           </div>
-          <div className="runs-auto">
-            <label>
-              <input
-                type="checkbox"
-                checked={autoRefreshRuns}
-                onChange={(e) => setAutoRefreshRuns(e.target.checked)}
-              />
-              auto-refresh
-            </label>
-            <select
-              value={String(autoRefreshSeconds)}
-              onChange={(e) => setAutoRefreshSeconds(Number(e.target.value))}
-              disabled={!autoRefreshRuns}
-            >
-              <option value="5">every 5s</option>
-              <option value="10">every 10s</option>
-              <option value="20">every 20s</option>
-              <option value="30">every 30s</option>
-            </select>
+
+          <div className="sidebar-actions">
+            <button className="btn btn--secondary" type="button" onClick={() => void refreshRuns()} disabled={runsLoading}>
+              {runsLoading ? "loading..." : "refresh"}
+            </button>
           </div>
-          <ul className="runs-list">
+
+          <ul className="sidebar-list">
             {recentRuns.map((item) => (
               <li key={item.run_id}>
                 <button
-                  className={`run-item ${runId === item.run_id ? "is-selected" : ""}`}
+                  className={`sidebar-item ${runId === item.run_id ? "sidebar-item--selected" : ""}`}
                   onClick={() => void handleSelectRun(item.run_id)}
                   type="button"
                 >
-                  <div>
-                    <strong>{item.run_id}</strong>
-                    <small>{item.thread_id}</small>
+                  <div className="sidebar-item-top">
+                    <span className={`status-dot status-dot--${item.status}`} />
+                    <span className="sidebar-item-id">{item.run_id.slice(0, 18)}</span>
+                    <span className="sidebar-item-thread">{item.thread_id}</span>
                   </div>
-                  <div>
-                    <span className={`chip chip-${item.status}`}>{item.status}</span>
+                  <div className="sidebar-item-bottom">
+                    <span className="chip chip-${item.status}">{item.status}</span>
                     <small>{item.event_count} events</small>
                   </div>
                 </button>
@@ -416,23 +363,25 @@ export default function HomeClient() {
             ))}
             {!runsLoading && !recentRuns.length ? <li className="empty">No runs found.</li> : null}
           </ul>
+
           {runsError ? <p className="error">{runsError}</p> : null}
-          <div className="runs-pagination">
+
+          <div className="sidebar-footer">
             <button
-              className="filter-btn"
+              className="btn btn--secondary"
               type="button"
               onClick={() => setRunsOffset((prev) => Math.max(0, prev - runsLimit))}
               disabled={runsOffset === 0 || runsLoading}
             >
               prev
             </button>
-            <span>
+            <span className="sidebar-page">
               {runsTotal > 0
-                ? `${runsOffset + 1}-${Math.min(runsOffset + runsLimit, runsTotal)} of ${runsTotal}`
-                : "0 runs"}
+                ? `${runsOffset + 1}-${Math.min(runsOffset + runsLimit, runsTotal)}`
+                : "0"}
             </span>
             <button
-              className="filter-btn"
+              className="btn btn--secondary"
               type="button"
               onClick={() => setRunsOffset((prev) => prev + runsLimit)}
               disabled={runsOffset + runsLimit >= runsTotal || runsLoading}
@@ -440,127 +389,145 @@ export default function HomeClient() {
               next
             </button>
           </div>
-        </article>
+        </aside>
 
-        <article className="panel composer">
-          <h2>Prompt Composer</h2>
-          <form onSubmit={handleRun}>
-            <label htmlFor="thread">Thread ID</label>
-            <input
-              id="thread"
-              name="thread"
-              value={threadId}
-              onChange={(e) => setThreadId(e.target.value)}
-              placeholder="demo-thread"
-              autoComplete="off"
-              required
-            />
-
-            <label htmlFor="prompt">Prompt</label>
-            <textarea
-              id="prompt"
-              name="prompt"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              rows={9}
-              autoComplete="off"
-              required
-            />
-
-            <button className="run-btn" disabled={runStatus === "running"} type="submit">
-              {runStatus === "running" ? "Running..." : "Start Run"}
-            </button>
-          </form>
-
-          <div className="status-row">
-            <span className={`chip chip-${runStatus}`}>status: {runStatus}</span>
-            {runId ? <span className="chip">run: {runId}</span> : null}
-          </div>
-          <div className="actions-row">
-            <button
-              className="filter-btn"
-              type="button"
-              onClick={() => void handleCancelRun()}
-              disabled={!runId || runStatus !== "running"}
-            >
-              Cancel Run
-            </button>
-            <button
-              className="filter-btn"
-              type="button"
-              onClick={() => void handleRetryRun()}
-              disabled={!runId || !["completed", "failed", "canceled"].includes(runStatus)}
-            >
-              Retry Run
+        <div className="workspace">
+          <div className="workspace-topbar">
+            <button className="btn btn--icon" type="button" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
             </button>
           </div>
-          {error ? <p className="error">{error}</p> : null}
-        </article>
 
-        <article className="panel timeline">
-          <div className="timeline-top">
-            <h2>Live Timeline</h2>
-            <div className="filters">
-              {(["all", "tools", "subagents", "errors"] as TimelineFilter[]).map((option) => (
+          {runId ? (
+            <div className="workspace-header">
+              <div className="workspace-header-left">
+                <span className={`status-dot status-dot--${runStatus}`} />
+                <span className="workspace-run-id">{runId}</span>
+                <span className={`chip chip-${runStatus}`}>{runStatus}</span>
+                {summary?.duration_ms ? <span className="workspace-duration">{summary.duration_ms} ms</span> : null}
+              </div>
+              <div className="workspace-header-actions">
                 <button
+                  className="btn btn--secondary"
                   type="button"
-                  className={`filter-btn ${option === filter ? "active" : ""}`}
-                  key={option}
-                  onClick={() => setFilter(option)}
+                  onClick={() => void handleCancelRun()}
+                  disabled={!runId || runStatus !== "running"}
                 >
-                  {option}
+                  Cancel
                 </button>
-              ))}
+                <button
+                  className="btn btn--secondary"
+                  type="button"
+                  onClick={() => void handleRetryRun()}
+                  disabled={!runId || !["completed", "failed", "canceled"].includes(runStatus)}
+                >
+                  Retry
+                </button>
+              </div>
             </div>
-          </div>
-
-          <ul>
-            {filteredEvents.map((item, idx) => (
-              <li key={`${item.timestamp}-${item.type}-${idx}`} className={item.level === "error" ? "is-error" : ""}>
-                <time>{getEventTime(item.timestamp)}</time>
-                <div className="event-main">
-                  <div className="event-head">
-                    <strong>{item.label}</strong>
-                    <span className={`event-kind ${item.level === "error" ? "tone-error" : ""}`}>{item.type}</span>
-                  </div>
-                  <p>{item.actor}</p>
-                  {eventDetail(item) ? <small>{eventDetail(item)}</small> : null}
-                </div>
-              </li>
-            ))}
-            {!filteredEvents.length ? <li className="empty">No events yet.</li> : null}
-          </ul>
-        </article>
-
-        <article className="panel answer">
-          <h2>Final Answer</h2>
-          <div className="answer-body">{finalAnswer ?? "Run a prompt to see final output here."}</div>
-          {hasMissingFinalAnswer ? (
-            <p className="error">Model returned an empty final answer. Please retry the prompt.</p>
           ) : null}
-          {summary?.citations?.length ? (
-            <>
-              <h3>Sources</h3>
-              <ul className="sources">
-                {summary.citations.map((url) => (
-                  <li key={url}>
-                    <a href={url} rel="noreferrer" target="_blank">
-                      {url}
-                    </a>
+
+          {error ? <div className="workspace-error">{error}</div> : null}
+
+          <div className="workspace-panels">
+            <section className="panel panel--composer">
+              <h2 className="panel-title">Composer</h2>
+              <form onSubmit={handleRun}>
+                <label htmlFor="thread">Thread ID</label>
+                <input
+                  id="thread"
+                  name="thread"
+                  value={threadId}
+                  onChange={(e) => setThreadId(e.target.value)}
+                  placeholder="demo-thread"
+                  autoComplete="off"
+                  required
+                />
+
+                <label htmlFor="prompt">Prompt</label>
+                <textarea
+                  id="prompt"
+                  name="prompt"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  rows={6}
+                  autoComplete="off"
+                  required
+                />
+
+                <button className="btn btn--primary" disabled={runStatus === "running"} type="submit">
+                  {runStatus === "running" ? "Running..." : "Run"}
+                </button>
+              </form>
+            </section>
+
+            <section className="panel panel--timeline">
+              <div className="panel-header">
+                <h2 className="panel-title">Timeline</h2>
+                <div className="timeline-filters">
+                  {(["all", "tools", "subagents", "errors"] as TimelineFilter[]).map((option) => (
+                    <button
+                      type="button"
+                      className={`btn btn--tag ${option === filter ? "btn--tag-active" : ""}`}
+                      key={option}
+                      onClick={() => setFilter(option)}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <ul className="timeline-list">
+                {filteredEvents.map((item, idx) => (
+                  <li key={`${item.timestamp}-${item.type}-${idx}`} className={`timeline-event ${item.level === "error" ? "timeline-event--error" : ""}`}>
+                    <time className="timeline-time">{getEventTime(item.timestamp)}</time>
+                    <div className="timeline-content">
+                      <div className="timeline-head">
+                        <strong>{item.label}</strong>
+                        <span className={`event-type ${item.level === "error" ? "event-type--error" : ""}`}>{item.type}</span>
+                      </div>
+                      <p className="timeline-actor">{item.actor}</p>
+                      {eventDetail(item) ? <small className="timeline-detail">{eventDetail(item)}</small> : null}
+                    </div>
                   </li>
                 ))}
+                {!filteredEvents.length ? <li className="empty">No events yet.</li> : null}
               </ul>
-            </>
-          ) : null}
-          {summary ? (
-            <div className="meta">
-              <span>events: {summary.event_count}</span>
-              <span>duration: {summary.duration_ms ?? 0} ms</span>
-              <span>recovered: {summary.recovery_attempted ? "yes" : "no"}</span>
-            </div>
-          ) : null}
-        </article>
-      </section>
-    </main>
+            </section>
+
+            <section className="panel panel--answer">
+              <h2 className="panel-title">Answer</h2>
+              <div className="answer-body">{finalAnswer ?? "Run a prompt to see final output here."}</div>
+              {hasMissingFinalAnswer ? (
+                <p className="error">Model returned an empty final answer. Please retry the prompt.</p>
+              ) : null}
+              {summary?.citations?.length ? (
+                <>
+                  <h3 className="sources-title">Sources</h3>
+                  <ul className="sources">
+                    {summary.citations.map((url) => (
+                      <li key={url}>
+                        <a href={url} rel="noreferrer" target="_blank">
+                          {url}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+              {summary ? (
+                <div className="workspace-meta">
+                  <span>events: {summary.event_count}</span>
+                  <span>duration: {summary.duration_ms ?? 0} ms</span>
+                  <span>recovered: {summary.recovery_attempted ? "yes" : "no"}</span>
+                </div>
+              ) : null}
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
