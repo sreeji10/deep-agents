@@ -3,6 +3,8 @@ import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 
 import "./globals.css";
 
+export const dynamic = "force-dynamic";
+
 const headline = Space_Grotesk({
   subsets: ["latin"],
   variable: "--font-headline"
@@ -25,7 +27,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={`${headline.variable} ${mono.variable}`}>{children}</body>
     </html>
   );
