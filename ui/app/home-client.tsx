@@ -9,6 +9,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 type TimelineFilter = "all" | "tools" | "subagents" | "errors";
 type RunStatusFilter = "all" | "queued" | "running" | "completed" | "failed" | "canceled";
 type RunStatus = "idle" | "running" | "completed" | "failed" | "canceled";
+type ConnectionState = "idle" | "connecting" | "connected" | "disconnected" | "completed";
+type EventCategory = "system" | "model" | "tool" | "subagent" | "warning" | "error" | "completion";
 const STORAGE_KEYS = {
   runStatusFilter: "deep_agents.run_status_filter",
   runsThreadFilter: "deep_agents.runs_thread_filter",
@@ -53,6 +55,50 @@ function eventDetail(event: RunEvent): string | null {
   return null;
 }
 
+function categorizeEvent(event: RunEvent): EventCategory {
+  if (event.level === "error") return "error";
+  if (event.level === "warn") return "warning";
+  if (event.type.includes("tool")) return "tool";
+  if (event.type.includes("subagent")) return "subagent";
+  if (event.type.includes("model")) return "model";
+  if (event.type === "run_completed" || event.type === "final_answer") return "completion";
+  if (event.type.startsWith("run_")) return "system";
+  return "system";
+}
+
+function eventSummary(event: RunEvent): string {
+  switch (event.type) {
+    case "tool_called": {
+      const name = event.payload.name;
+      return typeof name === "string" ? name : "Tool execution";
+    }
+    case "tool_result": return "Tool completed";
+    case "subagent_update": {
+      const preview = event.payload.content_preview;
+      return typeof preview === "string" ? preview.slice(0, 100) : "Subagent progress";
+    }
+    case "run_started": return "Run started";
+    case "run_completed": return "Completed successfully";
+    case "run_failed": {
+      const err = event.payload.error;
+      return typeof err === "string" ? err.slice(0, 120) : "Run encountered an error";
+    }
+    case "run_canceled": return "Run canceled";
+    case "model_call": return "Calling model...";
+    case "model_response": return "Model response received";
+    case "final_answer": return "Final answer ready";
+    default: return event.label || event.type;
+  }
+}
+
+function eventPayloadPreview(event: RunEvent): string {
+  const payload = event.payload;
+  if (event.type === "tool_called" && typeof payload.arguments === "string") {
+    return payload.arguments;
+  }
+  return JSON.stringify(payload, null, 2);
+}
+
 export default function HomeClient() {
   const [prompt, setPrompt] = useState("");
   const [threadId, setThreadId] = useState("demo-thread");
@@ -76,8 +122,13 @@ export default function HomeClient() {
   const [submitting, setSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
+  const [expandedSet, setExpandedSet] = useState<Set<number>>(new Set());
+  const [autoScroll, setAutoScroll] = useState(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const timelineListRef = useRef<HTMLUListElement>(null);
+  const completedRef = useRef(false);
 
   const examples = [
     "What is the capital of France?",
@@ -158,6 +209,16 @@ export default function HomeClient() {
     return events.some((event) => event.type === "final_answer_missing");
   }, [events, summary]);
 
+  const filterCounts = useMemo(() => {
+    const counts = { all: events.length, tools: 0, subagents: 0, errors: 0 };
+    for (const event of events) {
+      if (matchesFilter(event, "tools")) counts.tools++;
+      if (matchesFilter(event, "subagents")) counts.subagents++;
+      if (matchesFilter(event, "errors")) counts.errors++;
+    }
+    return counts;
+  }, [events]);
+
   async function refreshSummary(id: string) {
     const response = await fetch(`${API_BASE}/runs/${id}`);
     if (!response.ok) {
@@ -199,33 +260,48 @@ export default function HomeClient() {
 
   function connectStream(id: string) {
     eventSourceRef.current?.close();
+    completedRef.current = false;
+    setConnectionState("connecting");
     const source = new EventSource(`${API_BASE}/runs/${id}/stream`);
     eventSourceRef.current = source;
 
+    source.onopen = () => {
+      if (!completedRef.current) setConnectionState("connected");
+    };
+
     source.onmessage = (msg) => {
+      if (!completedRef.current) setConnectionState("connected");
       const event = JSON.parse(msg.data) as RunEvent;
       setEvents((prev) => [...prev, event]);
 
       if (event.type === "run_failed") {
+        completedRef.current = true;
         setRunStatus("failed");
+        setConnectionState("completed");
         setError(String(event.payload.error ?? "Run failed"));
         source.close();
         void refreshSummary(id).catch(() => undefined);
       }
       if (event.type === "run_canceled") {
+        completedRef.current = true;
         setRunStatus("canceled");
+        setConnectionState("completed");
         setError(String(event.payload.error ?? "Run canceled"));
         source.close();
         void refreshSummary(id).catch(() => undefined);
       }
       if (event.type === "run_completed") {
+        completedRef.current = true;
         setRunStatus("completed");
+        setConnectionState("completed");
         source.close();
         void refreshSummary(id).catch(() => undefined);
       }
     };
 
     source.onerror = () => {
+      if (completedRef.current) return;
+      setConnectionState("disconnected");
       setError("Lost stream connection to backend.");
       setRunStatus("failed");
       source.close();
@@ -243,6 +319,8 @@ export default function HomeClient() {
       return;
     }
 
+    setConnectionState("idle");
+    setExpandedSet(new Set());
     setSummary(null);
     setEvents([]);
     setSubmitting(true);
@@ -291,6 +369,8 @@ export default function HomeClient() {
     }
     const payload = (await response.json()) as { run_id: string; status: string };
     setRunId(payload.run_id);
+    setConnectionState("idle");
+    setExpandedSet(new Set());
     setSummary(null);
     setEvents([]);
     setRunStatus(payload.status === "running" ? "running" : "idle");
@@ -327,8 +407,36 @@ export default function HomeClient() {
       setThreadId(selected.thread_id);
       setPrompt(selected.prompt);
     }
+    setConnectionState("idle");
     setSidebarOpen(false);
   }
+
+  function toggleEvent(idx: number) {
+    setExpandedSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }
+
+  function handleTimelineScroll() {
+    const el = timelineListRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    setAutoScroll(atBottom);
+  }
+
+  function handleJumpToLatest() {
+    setAutoScroll(true);
+    timelineListRef.current?.scrollTo({ top: timelineListRef.current.scrollHeight, behavior: "smooth" });
+  }
+
+  useEffect(() => {
+    if (autoScroll && timelineListRef.current) {
+      timelineListRef.current.scrollTop = timelineListRef.current.scrollHeight;
+    }
+  }, [events, autoScroll]);
 
   return (
     <div className="app-shell">
@@ -547,35 +655,83 @@ export default function HomeClient() {
             <section className="panel panel--timeline">
               <div className="panel-header">
                 <h2 className="panel-title">Timeline</h2>
-                <div className="timeline-filters">
-                  {(["all", "tools", "subagents", "errors"] as TimelineFilter[]).map((option) => (
-                    <button
-                      type="button"
-                      className={`btn btn--tag ${option === filter ? "btn--tag-active" : ""}`}
-                      key={option}
-                      onClick={() => setFilter(option)}
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
+                {events.length > 0 ? (
+                  <div className="timeline-connection">
+                    <span className={`conn-dot conn-dot--${connectionState}`} />
+                    <span className="conn-label">{connectionState}</span>
+                  </div>
+                ) : null}
               </div>
-              <ul className="timeline-list">
-                {filteredEvents.map((item, idx) => (
-                  <li key={`${item.timestamp}-${item.type}-${idx}`} className={`timeline-event ${item.level === "error" ? "timeline-event--error" : ""}`}>
-                    <time className="timeline-time">{getEventTime(item.timestamp)}</time>
-                    <div className="timeline-content">
-                      <div className="timeline-head">
-                        <strong>{item.label}</strong>
-                        <span className={`event-type ${item.level === "error" ? "event-type--error" : ""}`}>{item.type}</span>
-                      </div>
-                      <p className="timeline-actor">{item.actor}</p>
-                      {eventDetail(item) ? <small className="timeline-detail">{eventDetail(item)}</small> : null}
-                    </div>
-                  </li>
-                ))}
-                {!filteredEvents.length ? <li className="empty">No events yet.</li> : null}
-              </ul>
+
+              {events.length > 0 ? (
+                <>
+                  <div className="timeline-filters">
+                    {(["all", "tools", "subagents", "errors"] as TimelineFilter[]).map((option) => {
+                      if (option !== "all" && filterCounts[option] === 0) return null;
+                      return (
+                        <button
+                          type="button"
+                          className={`btn btn--tag ${option === filter ? "btn--tag-active" : ""}`}
+                          key={option}
+                          onClick={() => setFilter(option)}
+                        >
+                          {option}
+                          {option !== "all" ? ` (${filterCounts[option]})` : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="timeline-scroll-wrap">
+                    <ul
+                      ref={timelineListRef}
+                      className="timeline-list"
+                      onScroll={handleTimelineScroll}
+                    >
+                      {filteredEvents.map((item, idx) => {
+                        const isExpanded = expandedSet.has(idx);
+                        const cat = categorizeEvent(item);
+
+                        return (
+                          <li
+                            key={`${item.timestamp}-${item.type}-${idx}`}
+                            className={`tl-row tl-row--${cat} ${isExpanded ? "tl-row--expanded" : ""}`}
+                          >
+                            <button
+                              type="button"
+                              className="tl-row-main"
+                              onClick={() => toggleEvent(idx)}
+                            >
+                              <time className="tl-time">{getEventTime(item.timestamp)}</time>
+                              <span className={`tl-badge tl-badge--${cat}`} />
+                              <span className="tl-label">{eventSummary(item)}</span>
+                              <span className="tl-type">{item.type}</span>
+                              <span className="tl-actor">{item.actor}</span>
+                              <span className="tl-chevron">{isExpanded ? "▲" : "▼"}</span>
+                            </button>
+
+                            {isExpanded ? (
+                              <pre className="tl-detail">{eventPayloadPreview(item)}</pre>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+
+                    {runStatus === "running" && !autoScroll ? (
+                      <button
+                        type="button"
+                        className="btn btn--jump"
+                        onClick={handleJumpToLatest}
+                      >
+                        ↓ Latest
+                      </button>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <div className="empty">No events yet.</div>
+              )}
             </section>
 
             <section className="panel panel--answer">
