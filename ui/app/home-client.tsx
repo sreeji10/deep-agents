@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import type { RunEvent, RunListResponse, RunSummary } from "../lib/types";
 
@@ -125,6 +127,9 @@ export default function HomeClient() {
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [expandedSet, setExpandedSet] = useState<Set<number>>(new Set());
   const [autoScroll, setAutoScroll] = useState(true);
+  const [workspaceTab, setWorkspaceTab] = useState<"answer" | "timeline">("answer");
+  const [copied, setCopied] = useState(false);
+  const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const timelineListRef = useRef<HTMLUListElement>(null);
@@ -219,6 +224,15 @@ export default function HomeClient() {
     return counts;
   }, [events]);
 
+  const answerState = useMemo(() => {
+    if (!runId) return "idle";
+    if (hasMissingFinalAnswer) return "missing";
+    if (runStatus === "completed" && finalAnswer) return "completed";
+    if (runStatus === "completed" && !finalAnswer) return "missing";
+    if (runStatus === "failed" || runStatus === "canceled") return "failed";
+    return "generating";
+  }, [runId, runStatus, finalAnswer, hasMissingFinalAnswer]);
+
   async function refreshSummary(id: string) {
     const response = await fetch(`${API_BASE}/runs/${id}`);
     if (!response.ok) {
@@ -294,6 +308,7 @@ export default function HomeClient() {
         completedRef.current = true;
         setRunStatus("completed");
         setConnectionState("completed");
+        setWorkspaceTab("answer");
         source.close();
         void refreshSummary(id).catch(() => undefined);
       }
@@ -321,6 +336,7 @@ export default function HomeClient() {
 
     setConnectionState("idle");
     setExpandedSet(new Set());
+    setWorkspaceTab("answer");
     setSummary(null);
     setEvents([]);
     setSubmitting(true);
@@ -371,6 +387,7 @@ export default function HomeClient() {
     setRunId(payload.run_id);
     setConnectionState("idle");
     setExpandedSet(new Set());
+    setWorkspaceTab("answer");
     setSummary(null);
     setEvents([]);
     setRunStatus(payload.status === "running" ? "running" : "idle");
@@ -408,6 +425,7 @@ export default function HomeClient() {
       setPrompt(selected.prompt);
     }
     setConnectionState("idle");
+    setWorkspaceTab("answer");
     setSidebarOpen(false);
   }
 
@@ -430,6 +448,29 @@ export default function HomeClient() {
   function handleJumpToLatest() {
     setAutoScroll(true);
     timelineListRef.current?.scrollTo({ top: timelineListRef.current.scrollHeight, behavior: "smooth" });
+  }
+
+  async function handleCopyAnswer() {
+    if (!finalAnswer) return;
+    try {
+      await navigator.clipboard.writeText(finalAnswer);
+      setCopied(true);
+      if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
+      copiedTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard not available
+    }
+  }
+
+  function handleExportAnswer() {
+    if (!finalAnswer) return;
+    const blob = new Blob([finalAnswer], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `answer-${runId ?? "run"}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   useEffect(() => {
@@ -652,116 +693,179 @@ export default function HomeClient() {
               </form>
             </section>
 
-            <section className="panel panel--timeline">
-              <div className="panel-header">
-                <h2 className="panel-title">Timeline</h2>
-                {events.length > 0 ? (
-                  <div className="timeline-connection">
-                    <span className={`conn-dot conn-dot--${connectionState}`} />
-                    <span className="conn-label">{connectionState}</span>
+            <div className="tab-bar">
+              <button
+                className={`tab ${workspaceTab === "answer" ? "tab--active" : ""}`}
+                onClick={() => setWorkspaceTab("answer")}
+                type="button"
+              >
+                Answer
+              </button>
+              <button
+                className={`tab ${workspaceTab === "timeline" ? "tab--active" : ""}`}
+                onClick={() => setWorkspaceTab("timeline")}
+                type="button"
+              >
+                Timeline
+                {events.length > 0 ? <span className="tab-count">{events.length}</span> : null}
+              </button>
+            </div>
+
+            {workspaceTab === "answer" ? (
+              <section className="panel panel--answer">
+                {answerState === "idle" ? (
+                  <div className="answer-empty">
+                    <p>Run a prompt to see the final answer here.</p>
                   </div>
                 ) : null}
-              </div>
 
-              {events.length > 0 ? (
-                <>
-                  <div className="timeline-filters">
-                    {(["all", "tools", "subagents", "errors"] as TimelineFilter[]).map((option) => {
-                      if (option !== "all" && filterCounts[option] === 0) return null;
-                      return (
-                        <button
-                          type="button"
-                          className={`btn btn--tag ${option === filter ? "btn--tag-active" : ""}`}
-                          key={option}
-                          onClick={() => setFilter(option)}
-                        >
-                          {option}
-                          {option !== "all" ? ` (${filterCounts[option]})` : null}
-                        </button>
-                      );
-                    })}
+                {answerState === "generating" ? (
+                  <div className="answer-generating">
+                    <span className="gen-indicator" />
+                    <span>Generating answer...</span>
                   </div>
+                ) : null}
 
-                  <div className="timeline-scroll-wrap">
-                    <ul
-                      ref={timelineListRef}
-                      className="timeline-list"
-                      onScroll={handleTimelineScroll}
-                    >
-                      {filteredEvents.map((item, idx) => {
-                        const isExpanded = expandedSet.has(idx);
-                        const cat = categorizeEvent(item);
+                {answerState === "completed" ? (
+                  <>
+                    <div className="answer-toolbar">
+                      <button
+                        className="btn btn--secondary btn--sm"
+                        onClick={handleCopyAnswer}
+                        type="button"
+                      >
+                        {copied ? "Copied!" : "Copy"}
+                      </button>
+                      <button
+                        className="btn btn--secondary btn--sm"
+                        onClick={handleExportAnswer}
+                        type="button"
+                      >
+                        Export
+                      </button>
+                    </div>
+                    <div className="answer-body markdown-body">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {finalAnswer ?? ""}
+                      </ReactMarkdown>
+                    </div>
+                    {summary?.citations?.length ? (
+                      <div className="sources-section">
+                        <h3 className="sources-title">Sources</h3>
+                        <ul className="sources">
+                          {summary.citations.map((url) => (
+                            <li key={url}>
+                              <a href={url} rel="noreferrer" target="_blank">{url}</a>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {summary ? (
+                      <div className="workspace-meta">
+                        <span>events: {summary.event_count}</span>
+                        <span>duration: {summary.duration_ms ?? 0} ms</span>
+                        <span>recovered: {summary.recovery_attempted ? "yes" : "no"}</span>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
 
+                {answerState === "missing" ? (
+                  <div className="answer-missing">
+                    <p>Model returned an empty final answer. Please retry the prompt.</p>
+                  </div>
+                ) : null}
+
+                {answerState === "failed" ? (
+                  <div className="answer-failed">
+                    <p>{error ?? "The run failed."}</p>
+                  </div>
+                ) : null}
+              </section>
+            ) : (
+              <section className="panel panel--timeline">
+                <div className="panel-header">
+                  <h2 className="panel-title">Timeline</h2>
+                  {events.length > 0 ? (
+                    <div className="timeline-connection">
+                      <span className={`conn-dot conn-dot--${connectionState}`} />
+                      <span className="conn-label">{connectionState}</span>
+                    </div>
+                  ) : null}
+                </div>
+
+                {events.length > 0 ? (
+                  <>
+                    <div className="timeline-filters">
+                      {(["all", "tools", "subagents", "errors"] as TimelineFilter[]).map((option) => {
+                        if (option !== "all" && filterCounts[option] === 0) return null;
                         return (
-                          <li
-                            key={`${item.timestamp}-${item.type}-${idx}`}
-                            className={`tl-row tl-row--${cat} ${isExpanded ? "tl-row--expanded" : ""}`}
+                          <button
+                            type="button"
+                            className={`btn btn--tag ${option === filter ? "btn--tag-active" : ""}`}
+                            key={option}
+                            onClick={() => setFilter(option)}
                           >
-                            <button
-                              type="button"
-                              className="tl-row-main"
-                              onClick={() => toggleEvent(idx)}
-                            >
-                              <time className="tl-time">{getEventTime(item.timestamp)}</time>
-                              <span className={`tl-badge tl-badge--${cat}`} />
-                              <span className="tl-label">{eventSummary(item)}</span>
-                              <span className="tl-type">{item.type}</span>
-                              <span className="tl-actor">{item.actor}</span>
-                              <span className="tl-chevron">{isExpanded ? "▲" : "▼"}</span>
-                            </button>
-
-                            {isExpanded ? (
-                              <pre className="tl-detail">{eventPayloadPreview(item)}</pre>
-                            ) : null}
-                          </li>
+                            {option}
+                            {option !== "all" ? ` (${filterCounts[option]})` : null}
+                          </button>
                         );
                       })}
-                    </ul>
+                    </div>
 
-                    {runStatus === "running" && !autoScroll ? (
-                      <button
-                        type="button"
-                        className="btn btn--jump"
-                        onClick={handleJumpToLatest}
+                    <div className="timeline-scroll-wrap">
+                      <ul
+                        ref={timelineListRef}
+                        className="timeline-list"
+                        onScroll={handleTimelineScroll}
                       >
-                        ↓ Latest
-                      </button>
-                    ) : null}
-                  </div>
-                </>
-              ) : (
-                <div className="empty">No events yet.</div>
-              )}
-            </section>
+                        {filteredEvents.map((item, idx) => {
+                          const isExpanded = expandedSet.has(idx);
+                          const cat = categorizeEvent(item);
 
-            <section className="panel panel--answer">
-              <h2 className="panel-title">Answer</h2>
-              <div className="answer-body">{finalAnswer ?? "Run a prompt to see final output here."}</div>
-              {hasMissingFinalAnswer ? (
-                <p className="error">Model returned an empty final answer. Please retry the prompt.</p>
-              ) : null}
-              {summary?.citations?.length ? (
-                <>
-                  <h3 className="sources-title">Sources</h3>
-                  <ul className="sources">
-                    {summary.citations.map((url) => (
-                      <li key={url}>
-                        <a href={url} rel="noreferrer" target="_blank">
-                          {url}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : null}
-              {summary ? (
-                <div className="workspace-meta">
-                  <span>events: {summary.event_count}</span>
-                  <span>duration: {summary.duration_ms ?? 0} ms</span>
-                  <span>recovered: {summary.recovery_attempted ? "yes" : "no"}</span>
-                </div>
-              ) : null}
-            </section>
+                          return (
+                            <li
+                              key={`${item.timestamp}-${item.type}-${idx}`}
+                              className={`tl-row tl-row--${cat} ${isExpanded ? "tl-row--expanded" : ""}`}
+                            >
+                              <button
+                                type="button"
+                                className="tl-row-main"
+                                onClick={() => toggleEvent(idx)}
+                              >
+                                <time className="tl-time">{getEventTime(item.timestamp)}</time>
+                                <span className={`tl-badge tl-badge--${cat}`} />
+                                <span className="tl-label">{eventSummary(item)}</span>
+                                <span className="tl-type">{item.type}</span>
+                                <span className="tl-actor">{item.actor}</span>
+                                <span className="tl-chevron">{isExpanded ? "▲" : "▼"}</span>
+                              </button>
+
+                              {isExpanded ? (
+                                <pre className="tl-detail">{eventPayloadPreview(item)}</pre>
+                              ) : null}
+                            </li>
+                          );
+                        })}
+                      </ul>
+
+                      {runStatus === "running" && !autoScroll ? (
+                        <button
+                          type="button"
+                          className="btn btn--jump"
+                          onClick={handleJumpToLatest}
+                        >
+                          ↓ Latest
+                        </button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <div className="empty">No events yet.</div>
+                )}
+              </section>
+            )}
           </div>
         </div>
       </div>
