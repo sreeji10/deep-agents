@@ -562,6 +562,84 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+/* Composer */
+.panel--composer {
+  border-bottom: none;
+}
+
+.panel--composer textarea {
+  min-height: 80px;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.composer-footer-left {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.composer-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.key-hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.btn--sm {
+  padding: 4px 10px;
+  font-size: 0.78rem;
+}
+
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.example-chip {
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  padding: 5px 12px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.example-chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.advanced-section {
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 6px;
+}
+
+.field-error {
+  color: var(--red);
+  font-size: 0.78rem;
+  font-weight: 600;
+  margin: 0;
+}
+
 /* States */
 .error {
   color: var(--red);

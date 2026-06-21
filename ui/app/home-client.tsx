@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import type { RunEvent, RunListResponse, RunSummary } from "../lib/types";
 
@@ -73,7 +73,17 @@ export default function HomeClient() {
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  const examples = [
+    "What is the capital of France?",
+    "Summarize the key findings from the latest IPCC climate report",
+    "Explain quantum computing in simple terms",
+  ];
 
   useEffect(() => {
     return () => {
@@ -224,16 +234,25 @@ export default function HomeClient() {
 
   async function handleRun(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setValidationError(null);
     setError(null);
+
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      setValidationError("Please enter a prompt.");
+      return;
+    }
+
     setSummary(null);
     setEvents([]);
-    setRunStatus("running");
+    setSubmitting(true);
 
     const response = await fetch(`${API_BASE}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, thread_id: threadId })
+      body: JSON.stringify({ prompt: trimmed, thread_id: threadId })
     });
+    setSubmitting(false);
     if (!response.ok) {
       setRunStatus("failed");
       setError(`Failed to start run (${response.status})`);
@@ -241,6 +260,7 @@ export default function HomeClient() {
     }
     const payload = (await response.json()) as { run_id: string };
     setRunId(payload.run_id);
+    setRunStatus("running");
     connectStream(payload.run_id);
     void refreshRuns();
   }
@@ -248,6 +268,7 @@ export default function HomeClient() {
   async function handleCancelRun() {
     if (!runId) return;
     setError(null);
+    setValidationError(null);
     const response = await fetch(`${API_BASE}/runs/${runId}/cancel`, { method: "POST" });
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
@@ -261,6 +282,7 @@ export default function HomeClient() {
   async function handleRetryRun() {
     if (!runId) return;
     setError(null);
+    setValidationError(null);
     const response = await fetch(`${API_BASE}/runs/${runId}/retry`, { method: "POST" });
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
@@ -276,8 +298,19 @@ export default function HomeClient() {
     void refreshRuns();
   }
 
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      const form = (event.target as HTMLTextAreaElement).closest("form");
+      if (form) {
+        form.requestSubmit();
+      }
+    }
+  }
+
   async function handleSelectRun(selectedRunId: string) {
     setError(null);
+    setValidationError(null);
     setRunId(selectedRunId);
     setEvents([]);
     await refreshSummary(selectedRunId);
@@ -433,33 +466,81 @@ export default function HomeClient() {
 
           <div className="workspace-panels">
             <section className="panel panel--composer">
-              <h2 className="panel-title">Composer</h2>
+              <div className="panel-header">
+                <h2 className="panel-title">Composer</h2>
+              </div>
               <form onSubmit={handleRun}>
-                <label htmlFor="thread">Thread ID</label>
-                <input
-                  id="thread"
-                  name="thread"
-                  value={threadId}
-                  onChange={(e) => setThreadId(e.target.value)}
-                  placeholder="demo-thread"
-                  autoComplete="off"
-                  required
-                />
-
-                <label htmlFor="prompt">Prompt</label>
                 <textarea
+                  ref={textareaRef}
                   id="prompt"
                   name="prompt"
                   value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  rows={6}
+                  onChange={(e) => {
+                    setPrompt(e.target.value);
+                    if (validationError) setValidationError(null);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  rows={4}
+                  placeholder="Ask anything..."
                   autoComplete="off"
-                  required
+                  disabled={submitting || runStatus === "running"}
                 />
 
-                <button className="btn btn--primary" disabled={runStatus === "running"} type="submit">
-                  {runStatus === "running" ? "Running..." : "Run"}
-                </button>
+                {validationError ? <p className="field-error">{validationError}</p> : null}
+
+                {!prompt.trim() && !runId ? (
+                  <div className="examples">
+                    {examples.map((ex) => (
+                      <button
+                        key={ex}
+                        type="button"
+                        className="example-chip"
+                        onClick={() => {
+                          setPrompt(ex);
+                          textareaRef.current?.focus();
+                        }}
+                      >
+                        {ex}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="composer-footer">
+                  <div className="composer-footer-left">
+                    <span className="key-hint">Ctrl+Enter to submit</span>
+                  </div>
+                  <div className="composer-footer-right">
+                    <button
+                      className="btn btn--secondary btn--sm"
+                      type="button"
+                      onClick={() => setAdvancedOpen(!advancedOpen)}
+                    >
+                      {advancedOpen ? "Hide" : "Advanced"}
+                    </button>
+                    <button
+                      className="btn btn--primary"
+                      disabled={submitting || runStatus === "running"}
+                      type="submit"
+                    >
+                      {submitting ? "Starting..." : runStatus === "running" ? "Running..." : "Run"}
+                    </button>
+                  </div>
+                </div>
+
+                {advancedOpen ? (
+                  <div className="advanced-section">
+                    <label htmlFor="thread">Thread ID</label>
+                    <input
+                      id="thread"
+                      name="thread"
+                      value={threadId}
+                      onChange={(e) => setThreadId(e.target.value)}
+                      placeholder="demo-thread"
+                      autoComplete="off"
+                    />
+                  </div>
+                ) : null}
               </form>
             </section>
 
