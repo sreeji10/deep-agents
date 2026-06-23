@@ -26,6 +26,16 @@ function getEventTime(timestamp: string): string {
   return date.toLocaleTimeString();
 }
 
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const diff = Date.now() - date.getTime();
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function extractAnswer(event: RunEvent): string | null {
   const answer = event.payload.answer;
   if (typeof answer !== "string") return null;
@@ -191,9 +201,31 @@ export default function HomeClient() {
 
   useEffect(() => {
     if (!prefsLoaded) return;
-    void refreshRuns();
+    void fetchRunsAtOffset(0, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefsLoaded, runsOffset, runsLimit, runStatusFilter, runsThreadFilter]);
+  }, [prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) return;
+    const params = new URLSearchParams(window.location.search);
+    const urlRunId = params.get("run_id");
+    if (urlRunId && urlRunId !== runId) {
+      setRunId(urlRunId);
+      setEvents([]);
+      (async () => {
+        try {
+          const s = await refreshSummary(urlRunId);
+          setRunStatus(s.status as RunStatus);
+          setThreadId(s.thread_id);
+          setPrompt(s.prompt);
+          connectStream(urlRunId);
+        } catch {
+          setError("Failed to load run from URL.");
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefsLoaded]);
 
   const filteredEvents = useMemo(
     () => events.filter((event) => matchesFilter(event, filter)),
@@ -233,43 +265,49 @@ export default function HomeClient() {
     return "generating";
   }, [runId, runStatus, finalAnswer, hasMissingFinalAnswer]);
 
-  async function refreshSummary(id: string) {
+  async function refreshSummary(id: string): Promise<RunSummary> {
     const response = await fetch(`${API_BASE}/runs/${id}`);
     if (!response.ok) {
       throw new Error(`Failed to fetch run summary (${response.status})`);
     }
     const payload = (await response.json()) as RunSummary;
     setSummary(payload);
+    return payload;
   }
 
   async function refreshRuns() {
+    setRunsOffset(0);
+    await fetchRunsAtOffset(0, false);
+  }
+
+  async function fetchRunsAtOffset(offset: number, append: boolean) {
     setRunsLoading(true);
     setRunsError(null);
     const params = new URLSearchParams({
       limit: String(runsLimit),
-      offset: String(runsOffset)
+      offset: String(offset)
     });
-    if (runStatusFilter !== "all") {
-      params.set("status", runStatusFilter);
-    }
+    if (runStatusFilter !== "all") params.set("status", runStatusFilter);
     const threadFilterValue = runsThreadFilter.trim();
-    if (threadFilterValue) {
-      params.set("thread_id", threadFilterValue);
-    }
+    if (threadFilterValue) params.set("thread_id", threadFilterValue);
 
     try {
       const response = await fetch(`${API_BASE}/runs?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch run list (${response.status})`);
-      }
+      if (!response.ok) throw new Error(`Failed to fetch run list (${response.status})`);
       const payload = (await response.json()) as RunListResponse;
-      setRecentRuns(payload.items);
+      setRecentRuns(prev => append ? [...prev, ...payload.items] : payload.items);
       setRunsTotal(payload.total);
     } catch (err) {
       setRunsError(err instanceof Error ? err.message : "Failed to load runs.");
     } finally {
       setRunsLoading(false);
     }
+  }
+
+  async function loadMoreRuns() {
+    const nextOffset = runsOffset + runsLimit;
+    await fetchRunsAtOffset(nextOffset, true);
+    setRunsOffset(nextOffset);
   }
 
   function connectStream(id: string) {
@@ -356,6 +394,7 @@ export default function HomeClient() {
     setRunId(payload.run_id);
     setRunStatus("running");
     connectStream(payload.run_id);
+    window.history.pushState(null, "", `?run_id=${payload.run_id}`);
     void refreshRuns();
   }
 
@@ -392,6 +431,7 @@ export default function HomeClient() {
     setEvents([]);
     setRunStatus(payload.status === "running" ? "running" : "idle");
     connectStream(payload.run_id);
+    window.history.pushState(null, "", `?run_id=${payload.run_id}`);
     void refreshRuns();
   }
 
@@ -427,6 +467,7 @@ export default function HomeClient() {
     setConnectionState("idle");
     setWorkspaceTab("answer");
     setSidebarOpen(false);
+    window.history.pushState(null, "", `?run_id=${selectedRunId}`);
   }
 
   function toggleEvent(idx: number) {
@@ -496,8 +537,8 @@ export default function HomeClient() {
             <select
               value={runStatusFilter}
               onChange={(e) => {
-                setRunsOffset(0);
                 setRunStatusFilter(e.target.value as RunStatusFilter);
+                void refreshRuns();
               }}
             >
               <option value="all">all statuses</option>
@@ -510,10 +551,10 @@ export default function HomeClient() {
             <input
               value={runsThreadFilter}
               onChange={(e) => {
-                setRunsOffset(0);
                 setRunsThreadFilter(e.target.value);
+                void refreshRuns();
               }}
-              placeholder="filter thread..."
+              placeholder="search thread..."
             />
           </div>
 
@@ -533,12 +574,14 @@ export default function HomeClient() {
                 >
                   <div className="sidebar-item-top">
                     <span className={`status-dot status-dot--${item.status}`} />
-                    <span className="sidebar-item-id">{item.run_id.slice(0, 18)}</span>
-                    <span className="sidebar-item-thread">{item.thread_id}</span>
+                    <span className="sidebar-item-id">{item.run_id.slice(0, 10)}</span>
+                    <span className="sidebar-item-time">{formatTime(item.started_at)}</span>
                   </div>
+                  <div className="sidebar-item-prompt">{item.prompt.slice(0, 70)}{item.prompt.length > 70 ? "..." : ""}</div>
                   <div className="sidebar-item-bottom">
-                    <span className="chip chip-${item.status}">{item.status}</span>
+                    <span className={`chip chip-${item.status}`}>{item.status}</span>
                     <small>{item.event_count} events</small>
+                    {item.duration_ms ? <small>{item.duration_ms} ms</small> : null}
                   </div>
                 </button>
               </li>
@@ -548,29 +591,18 @@ export default function HomeClient() {
 
           {runsError ? <p className="error">{runsError}</p> : null}
 
-          <div className="sidebar-footer">
-            <button
-              className="btn btn--secondary"
-              type="button"
-              onClick={() => setRunsOffset((prev) => Math.max(0, prev - runsLimit))}
-              disabled={runsOffset === 0 || runsLoading}
-            >
-              prev
-            </button>
-            <span className="sidebar-page">
-              {runsTotal > 0
-                ? `${runsOffset + 1}-${Math.min(runsOffset + runsLimit, runsTotal)}`
-                : "0"}
-            </span>
-            <button
-              className="btn btn--secondary"
-              type="button"
-              onClick={() => setRunsOffset((prev) => prev + runsLimit)}
-              disabled={runsOffset + runsLimit >= runsTotal || runsLoading}
-            >
-              next
-            </button>
-          </div>
+          {runsOffset + runsLimit < runsTotal ? (
+            <div className="sidebar-footer">
+              <button
+                className="btn btn--secondary sidebar-load-more"
+                type="button"
+                onClick={() => void loadMoreRuns()}
+                disabled={runsLoading}
+              >
+                {runsLoading ? "loading..." : `load more (${runsTotal - runsOffset - runsLimit} remaining)`}
+              </button>
+            </div>
+          ) : null}
         </aside>
 
         <div className="workspace">
