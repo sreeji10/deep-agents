@@ -3,8 +3,19 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  MiniMap,
+  useNodesState,
+  useEdgesState,
+} from "@xyflow/react";
+import type { Node, Edge } from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 
 import type { RunEvent, RunListResponse, RunSummary } from "../lib/types";
+import { eventsToGraph, type GraphNodeData } from "../lib/graph-utils";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
@@ -137,13 +148,16 @@ export default function HomeClient() {
   const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
   const [expandedSet, setExpandedSet] = useState<Set<number>>(new Set());
   const [autoScroll, setAutoScroll] = useState(true);
-  const [workspaceTab, setWorkspaceTab] = useState<"answer" | "timeline">("answer");
+  const [workspaceTab, setWorkspaceTab] = useState<"answer" | "timeline" | "graph">("answer");
   const [copied, setCopied] = useState(false);
   const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const timelineListRef = useRef<HTMLUListElement>(null);
   const completedRef = useRef(false);
+
+  const [graphNodes, setGraphNodes, onGraphNodesChange] = useNodesState<Node<GraphNodeData>>([]);
+  const [graphEdges, setGraphEdges, onGraphEdgesChange] = useEdgesState<Edge>([]);
 
   const examples = [
     "What is the capital of France?",
@@ -520,6 +534,12 @@ export default function HomeClient() {
     }
   }, [events, autoScroll]);
 
+  const graphData = useMemo(() => eventsToGraph(events), [events]);
+  useEffect(() => {
+    setGraphNodes(graphData.nodes);
+    setGraphEdges(graphData.edges);
+  }, [graphData, setGraphNodes, setGraphEdges]);
+
   return (
     <div className="app-shell">
       {connectError ? <div className="connect-error">{connectError}</div> : null}
@@ -757,6 +777,16 @@ export default function HomeClient() {
                 Timeline
                 {events.length > 0 ? <span className="tab-count">{events.length}</span> : null}
               </button>
+              <button
+                className={`tab ${workspaceTab === "graph" ? "tab--active" : ""}`}
+                onClick={() => setWorkspaceTab("graph")}
+                type="button"
+                role="tab"
+                aria-selected={workspaceTab === "graph"}
+              >
+                Graph
+                {graphData.nodes.length > 1 ? <span className="tab-count">{graphData.nodes.length}</span> : null}
+              </button>
             </div>
 
             {workspaceTab === "answer" ? (
@@ -833,7 +863,7 @@ export default function HomeClient() {
                   </div>
                 ) : null}
               </section>
-            ) : (
+            ) : workspaceTab === "timeline" ? (
               <section className="panel panel--timeline">
                 <div className="panel-header">
                   <h2 className="panel-title">Timeline</h2>
@@ -918,6 +948,30 @@ export default function HomeClient() {
                   </>
                 ) : (
                   <div className="empty">No events yet.</div>
+                )}
+              </section>
+            ) : (
+              <section className="panel panel--graph">
+                {graphData.nodes.length > 1 ? (
+                  <div className="graph-container">
+                    <ReactFlow
+                      nodes={graphNodes}
+                      edges={graphEdges}
+                      onNodesChange={onGraphNodesChange}
+                      onEdgesChange={onGraphEdgesChange}
+                      fitView
+                      nodesDraggable={false}
+                      nodesConnectable={false}
+                      zoomOnScroll
+                      panOnDrag
+                    >
+                      <Background />
+                      <Controls />
+                      <MiniMap />
+                    </ReactFlow>
+                  </div>
+                ) : (
+                  <div className="empty">No events to graph.</div>
                 )}
               </section>
             )}

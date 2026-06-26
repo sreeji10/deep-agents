@@ -686,6 +686,20 @@ textarea {
   margin-top: 16px;
 }
 
+/* Graph */
+.panel--graph {
+  min-height: 300px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.graph-container {
+  width: 100%;
+  height: 400px;
+}
+
 /* Timeline */
 .panel--timeline {
   display: flex;
