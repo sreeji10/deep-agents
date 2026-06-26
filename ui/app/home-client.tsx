@@ -535,6 +535,8 @@ export default function HomeClient() {
 
           <div className="sidebar-controls">
             <select
+              id="status-filter"
+              aria-label="Filter by status"
               value={runStatusFilter}
               onChange={(e) => {
                 setRunStatusFilter(e.target.value as RunStatusFilter);
@@ -549,6 +551,8 @@ export default function HomeClient() {
               <option value="canceled">canceled</option>
             </select>
             <input
+              id="thread-search"
+              aria-label="Search by thread ID"
               value={runsThreadFilter}
               onChange={(e) => {
                 setRunsThreadFilter(e.target.value);
@@ -559,7 +563,7 @@ export default function HomeClient() {
           </div>
 
           <div className="sidebar-actions">
-            <button className="btn btn--secondary" type="button" onClick={() => void refreshRuns()} disabled={runsLoading}>
+            <button className="btn btn--secondary" type="button" onClick={() => void refreshRuns()} disabled={runsLoading} aria-label="Refresh run list">
               {runsLoading ? "loading..." : "refresh"}
             </button>
           </div>
@@ -571,6 +575,7 @@ export default function HomeClient() {
                   className={`sidebar-item ${runId === item.run_id ? "sidebar-item--selected" : ""}`}
                   onClick={() => void handleSelectRun(item.run_id)}
                   type="button"
+                  aria-current={runId === item.run_id ? "true" : undefined}
                 >
                   <div className="sidebar-item-top">
                     <span className={`status-dot status-dot--${item.status}`} />
@@ -598,6 +603,7 @@ export default function HomeClient() {
                 type="button"
                 onClick={() => void loadMoreRuns()}
                 disabled={runsLoading}
+                aria-label="Load more runs"
               >
                 {runsLoading ? "loading..." : `load more (${runsTotal - runsOffset - runsLimit} remaining)`}
               </button>
@@ -628,6 +634,7 @@ export default function HomeClient() {
                   type="button"
                   onClick={() => void handleCancelRun()}
                   disabled={!runId || runStatus !== "running"}
+                  aria-label="Cancel current run"
                 >
                   Cancel
                 </button>
@@ -636,6 +643,7 @@ export default function HomeClient() {
                   type="button"
                   onClick={() => void handleRetryRun()}
                   disabled={!runId || !["completed", "failed", "canceled"].includes(runStatus)}
+                  aria-label="Retry current run"
                 >
                   Retry
                 </button>
@@ -680,6 +688,7 @@ export default function HomeClient() {
                           setPrompt(ex);
                           textareaRef.current?.focus();
                         }}
+                        aria-label={`Use example: ${ex}`}
                       >
                         {ex}
                       </button>
@@ -696,6 +705,8 @@ export default function HomeClient() {
                       className="btn btn--secondary btn--sm"
                       type="button"
                       onClick={() => setAdvancedOpen(!advancedOpen)}
+                      aria-label={advancedOpen ? "Hide advanced settings" : "Show advanced settings"}
+                      aria-expanded={advancedOpen}
                     >
                       {advancedOpen ? "Hide" : "Advanced"}
                     </button>
@@ -703,6 +714,7 @@ export default function HomeClient() {
                       className="btn btn--primary"
                       disabled={submitting || runStatus === "running"}
                       type="submit"
+                      aria-label="Submit prompt"
                     >
                       {submitting ? "Starting..." : runStatus === "running" ? "Running..." : "Run"}
                     </button>
@@ -725,11 +737,13 @@ export default function HomeClient() {
               </form>
             </section>
 
-            <div className="tab-bar">
+            <div className="tab-bar" role="tablist">
               <button
                 className={`tab ${workspaceTab === "answer" ? "tab--active" : ""}`}
                 onClick={() => setWorkspaceTab("answer")}
                 type="button"
+                role="tab"
+                aria-selected={workspaceTab === "answer"}
               >
                 Answer
               </button>
@@ -737,6 +751,8 @@ export default function HomeClient() {
                 className={`tab ${workspaceTab === "timeline" ? "tab--active" : ""}`}
                 onClick={() => setWorkspaceTab("timeline")}
                 type="button"
+                role="tab"
+                aria-selected={workspaceTab === "timeline"}
               >
                 Timeline
                 {events.length > 0 ? <span className="tab-count">{events.length}</span> : null}
@@ -765,6 +781,7 @@ export default function HomeClient() {
                         className="btn btn--secondary btn--sm"
                         onClick={handleCopyAnswer}
                         type="button"
+                        aria-label="Copy answer to clipboard"
                       >
                         {copied ? "Copied!" : "Copy"}
                       </button>
@@ -772,6 +789,7 @@ export default function HomeClient() {
                         className="btn btn--secondary btn--sm"
                         onClick={handleExportAnswer}
                         type="button"
+                        aria-label="Export answer as markdown file"
                       >
                         Export
                       </button>
@@ -838,6 +856,7 @@ export default function HomeClient() {
                             className={`btn btn--tag ${option === filter ? "btn--tag-active" : ""}`}
                             key={option}
                             onClick={() => setFilter(option)}
+                            aria-pressed={option === filter}
                           >
                             {option}
                             {option !== "all" ? ` (${filterCounts[option]})` : null}
@@ -851,6 +870,8 @@ export default function HomeClient() {
                         ref={timelineListRef}
                         className="timeline-list"
                         onScroll={handleTimelineScroll}
+                        role="log"
+                        aria-label="Run event timeline"
                       >
                         {filteredEvents.map((item, idx) => {
                           const isExpanded = expandedSet.has(idx);
@@ -865,6 +886,7 @@ export default function HomeClient() {
                                 type="button"
                                 className="tl-row-main"
                                 onClick={() => toggleEvent(idx)}
+                                aria-label={`${isExpanded ? "Collapse" : "Expand"} event ${item.type}`}
                               >
                                 <time className="tl-time">{getEventTime(item.timestamp)}</time>
                                 <span className={`tl-badge tl-badge--${cat}`} />
@@ -887,6 +909,7 @@ export default function HomeClient() {
                           type="button"
                           className="btn btn--jump"
                           onClick={handleJumpToLatest}
+                          aria-label="Jump to latest event"
                         >
                           ↓ Latest
                         </button>
