@@ -360,6 +360,7 @@ export default function HomeClient() {
         completedRef.current = true;
         setRunStatus("completed");
         setConnectionState("completed");
+        setError(null);
         setWorkspaceTab("answer");
         source.close();
         void refreshSummary(id).catch(() => undefined);
@@ -367,11 +368,10 @@ export default function HomeClient() {
     };
 
     source.onerror = () => {
-      if (completedRef.current) return;
-      setConnectionState("disconnected");
-      setError("Lost stream connection to backend.");
-      setRunStatus("failed");
-      source.close();
+      // EventSource fires onerror for ANY connection drop (including a graceful
+      // server-side close after run_completed). Do NOT set error or fail status
+      // here — only server-sent terminal events should determine that.
+      if (!completedRef.current) setConnectionState("disconnected");
     };
   }
 
