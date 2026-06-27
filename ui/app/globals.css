@@ -95,7 +95,44 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-.sidebar-controls select,
+.select-wrap {
+  position: relative;
+}
+
+.select-wrap::after {
+  content: "▾";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.7rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.select-wrap select {
+  appearance: none;
+  width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 6px 22px 6px 10px;
+  font-size: 0.82rem;
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.select-wrap select option {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.select-wrap select option:checked {
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--primary);
+  font-weight: 600;
+}
+
 .sidebar-controls input {
   width: 100%;
   border-radius: var(--radius);
@@ -424,8 +461,9 @@ select:focus {
 }
 
 textarea {
-  resize: vertical;
+  resize: none;
   font-family: inherit;
+  overflow-y: auto;
 }
 
 /* Status dot */
@@ -725,6 +763,7 @@ textarea {
 .conn-dot--idle { background: var(--border); }
 .conn-dot--connecting { background: var(--warn); animation: pulse 0.8s ease infinite; }
 .conn-dot--connected { background: var(--ok); }
+.conn-dot--reconnecting { background: var(--warn); animation: pulse 0.5s ease infinite; }
 .conn-dot--disconnected { background: var(--red); }
 .conn-dot--completed { background: var(--muted); }
 
@@ -924,7 +963,8 @@ textarea {
 }
 
 .panel--composer textarea {
-  min-height: 80px;
+  min-height: 44px;
+  max-height: 300px;
   font-size: 0.95rem;
   line-height: 1.45;
   transition: border-color 120ms ease, box-shadow 120ms ease;
@@ -1012,6 +1052,29 @@ textarea {
   border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.02);
   font-size: 0.82rem;
+}
+
+.sidebar-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 32px 16px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.sidebar-empty-icon {
+  font-size: 1.4rem;
+  opacity: 0.4;
+  margin-bottom: 4px;
+}
+
+.sidebar-empty-sub {
+  font-weight: 400;
+  font-size: 0.75rem;
+  opacity: 0.7;
 }
 
 /* Mobile */

@@ -22,7 +22,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 type TimelineFilter = "all" | "tools" | "subagents" | "errors";
 type RunStatusFilter = "all" | "queued" | "running" | "completed" | "failed" | "canceled";
 type RunStatus = "idle" | "running" | "completed" | "failed" | "canceled";
-type ConnectionState = "idle" | "connecting" | "connected" | "disconnected" | "completed";
+type ConnectionState = "idle" | "connecting" | "connected" | "reconnecting" | "disconnected" | "completed";
 type EventCategory = "system" | "model" | "tool" | "subagent" | "warning" | "error" | "completion";
 const STORAGE_KEYS = {
   runStatusFilter: "deep_agents.run_status_filter",
@@ -371,7 +371,9 @@ export default function HomeClient() {
       // EventSource fires onerror for ANY connection drop (including a graceful
       // server-side close after run_completed). Do NOT set error or fail status
       // here — only server-sent terminal events should determine that.
-      if (!completedRef.current) setConnectionState("disconnected");
+      if (!completedRef.current) {
+        setConnectionState((prev) => prev === "connected" ? "reconnecting" : "disconnected");
+      }
     };
   }
 
@@ -554,22 +556,24 @@ export default function HomeClient() {
           </div>
 
           <div className="sidebar-controls">
-            <select
-              id="status-filter"
-              aria-label="Filter by status"
-              value={runStatusFilter}
-              onChange={(e) => {
-                setRunStatusFilter(e.target.value as RunStatusFilter);
-                void refreshRuns();
-              }}
-            >
-              <option value="all">all statuses</option>
-              <option value="queued">queued</option>
-              <option value="running">running</option>
-              <option value="completed">completed</option>
-              <option value="failed">failed</option>
-              <option value="canceled">canceled</option>
-            </select>
+            <div className="select-wrap">
+              <select
+                id="status-filter"
+                aria-label="Filter by status"
+                value={runStatusFilter}
+                onChange={(e) => {
+                  setRunStatusFilter(e.target.value as RunStatusFilter);
+                  void refreshRuns();
+                }}
+              >
+                <option value="all">all statuses</option>
+                <option value="queued">queued</option>
+                <option value="running">running</option>
+                <option value="completed">completed</option>
+                <option value="failed">failed</option>
+                <option value="canceled">canceled</option>
+              </select>
+            </div>
             <input
               id="thread-search"
               aria-label="Search by thread ID"
@@ -611,7 +615,13 @@ export default function HomeClient() {
                 </button>
               </li>
             ))}
-            {!runsLoading && !recentRuns.length ? <li className="empty">No runs found.</li> : null}
+            {!runsLoading && !recentRuns.length ? (
+              <li className="sidebar-empty">
+                <span className="sidebar-empty-icon">□</span>
+                <span>No runs yet</span>
+                <span className="sidebar-empty-sub">Submit a prompt above to get started.</span>
+              </li>
+            ) : null}
           </ul>
 
           {runsError ? <p className="error">{runsError}</p> : null}
@@ -687,12 +697,16 @@ export default function HomeClient() {
                   onChange={(e) => {
                     setPrompt(e.target.value);
                     if (validationError) setValidationError(null);
+                    const el = e.target;
+                    el.style.height = "auto";
+                    el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
                   }}
                   onKeyDown={handleKeyDown}
-                  rows={4}
+                  rows={1}
                   placeholder="Ask anything..."
                   autoComplete="off"
                   disabled={submitting || runStatus === "running"}
+                  title={submitting || runStatus === "running" ? "A run is in progress" : undefined}
                 />
 
                 {validationError ? <p className="field-error">{validationError}</p> : null}
@@ -735,6 +749,7 @@ export default function HomeClient() {
                       disabled={submitting || runStatus === "running"}
                       type="submit"
                       aria-label="Submit prompt"
+                      title={runStatus === "running" ? "A run is in progress" : undefined}
                     >
                       {submitting ? "Starting..." : runStatus === "running" ? "Running..." : "Run"}
                     </button>
@@ -845,7 +860,6 @@ export default function HomeClient() {
                       <div className="workspace-meta">
                         <span>events: {summary.event_count}</span>
                         <span>duration: {summary.duration_ms ?? 0} ms</span>
-                        <span>recovered: {summary.recovery_attempted ? "yes" : "no"}</span>
                       </div>
                     ) : null}
                   </>
@@ -868,9 +882,8 @@ export default function HomeClient() {
                 <div className="panel-header">
                   <h2 className="panel-title">Timeline</h2>
                   {events.length > 0 ? (
-                    <div className="timeline-connection">
+                    <div className="timeline-connection" title={connectionState}>
                       <span className={`conn-dot conn-dot--${connectionState}`} />
-                      <span className="conn-label">{connectionState}</span>
                     </div>
                   ) : null}
                 </div>
